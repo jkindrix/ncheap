@@ -130,9 +130,8 @@ pub fn resolve(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Profile, ConfigError> {
     let file = file.unwrap_or_default();
-    let explicit = profile_flag.is_some()
-        || env("NCHEAP_PROFILE").is_some()
-        || file.default_profile.is_some();
+    let explicit =
+        profile_flag.is_some() || env("NCHEAP_PROFILE").is_some() || file.default_profile.is_some();
     let name = profile_flag
         .map(str::to_owned)
         .or_else(|| env("NCHEAP_PROFILE"))

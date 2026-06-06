@@ -151,7 +151,11 @@ impl<T: Transport> Client<T> {
             ("Command".into(), command),
             ("ClientIp".into(), self.profile.client_ip.clone()),
         ];
-        all.extend(params.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+        all.extend(
+            params
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+        );
 
         self.throttle();
         let mut attempt = self.transport.send(self.profile.endpoint(), &all);

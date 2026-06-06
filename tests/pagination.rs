@@ -140,17 +140,18 @@ fn requests_carry_auth_pagination_and_prefixed_command() {
 
 #[test]
 fn ip_rejection_error_is_explained() {
-    let transport = FakeTransport::new(vec![error_xml(
-        "1011150",
-        "Parameter RequestIP is invalid",
-    )]);
+    let transport =
+        FakeTransport::new(vec![error_xml("1011150", "Parameter RequestIP is invalid")]);
     let client = Client::new(transport, test_profile());
 
     let err = domains::list(&client).expect_err("should fail");
     assert_eq!(err.exit_code(), 1);
     assert_eq!(err.code(), Some("1011150"));
     let msg = err.to_string();
-    assert!(msg.contains("whitelist"), "must explain the IP rejection: {msg}");
+    assert!(
+        msg.contains("whitelist"),
+        "must explain the IP rejection: {msg}"
+    );
 }
 
 #[test]

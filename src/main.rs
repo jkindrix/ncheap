@@ -3,36 +3,23 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use ncheap::api::{Client, HttpTransport};
-use ncheap::cli::{AccountCommand, Cli, Command, DnsCommand, DomainsCommand};
+use ncheap::cli::{AccountCommand, Cli, Command, DnsCommand, DomainsCommand, PrivacyCommand};
+use ncheap::commands::account::PricingQuery;
 use ncheap::{commands, config, output};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let command_name = match &cli.command {
-        Command::Domains { command } => match command {
-            DomainsCommand::List => "domains.list",
-            DomainsCommand::Check { .. } => "domains.check",
-            DomainsCommand::Lock { .. } => "domains.lock",
-            DomainsCommand::Info { .. } => "domains.info",
-            DomainsCommand::Contacts { .. } => "domains.contacts",
-        },
-        Command::Account {
-            command: AccountCommand::Balances { .. },
-        } => "account.balances",
-        Command::Dns {
-            command: DnsCommand::Get { .. },
-        } => "dns.get",
-    };
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            output::failure(cli.json, command_name, &e);
+            output::failure(cli.json, cli.command.name(), &e);
             ExitCode::from(e.exit_code())
         }
     }
 }
 
 fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
+    let name = cli.command.name();
     let profile = config::load(cli.profile.as_deref())?;
     let client = Client::new(HttpTransport::new(), profile);
     match &cli.command {
@@ -41,7 +28,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 let domains = commands::domains::list(&client)?;
                 output::success(
                     cli.json,
-                    "domains.list",
+                    name,
                     &domains,
                     client.profile(),
                     client.calls(),
@@ -53,7 +40,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 let results = commands::domains::check(&client, domains)?;
                 output::success(
                     cli.json,
-                    "domains.check",
+                    name,
                     &results,
                     client.profile(),
                     client.calls(),
@@ -65,7 +52,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 let status = commands::domains::lock_status(&client, domain)?;
                 output::success(
                     cli.json,
-                    "domains.lock",
+                    name,
                     &status,
                     client.profile(),
                     client.calls(),
@@ -77,7 +64,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 let info = commands::domains::info(&client, domain)?;
                 output::success(
                     cli.json,
-                    "domains.info",
+                    name,
                     &info,
                     client.profile(),
                     client.calls(),
@@ -91,7 +78,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 if *full {
                     output::success(
                         cli.json,
-                        "domains.contacts",
+                        name,
                         &contacts,
                         client.profile(),
                         client.calls(),
@@ -101,7 +88,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     let view = commands::domains::contacts_redacted_view(&contacts);
                     output::success(
                         cli.json,
-                        "domains.contacts",
+                        name,
                         &view,
                         client.profile(),
                         client.calls(),
@@ -111,44 +98,83 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
         },
-        Command::Account {
-            command: AccountCommand::Balances { full },
-        } => {
-            let balances = commands::account::balances(&client)?;
-            let human = || commands::account::render(&balances, *full);
-            if *full {
-                output::success(
-                    cli.json,
-                    "account.balances",
-                    &balances,
-                    client.profile(),
-                    client.calls(),
-                    human,
-                );
-            } else {
-                let view = commands::account::redacted_view(&balances);
-                output::success(
-                    cli.json,
-                    "account.balances",
-                    &view,
-                    client.profile(),
-                    client.calls(),
-                    human,
-                );
+        Command::Account { command } => match command {
+            AccountCommand::Balances { full } => {
+                let balances = commands::account::balances(&client)?;
+                let human = || commands::account::render(&balances, *full);
+                if *full {
+                    output::success(
+                        cli.json,
+                        name,
+                        &balances,
+                        client.profile(),
+                        client.calls(),
+                        human,
+                    );
+                } else {
+                    let view = commands::account::redacted_view(&balances);
+                    output::success(
+                        cli.json,
+                        name,
+                        &view,
+                        client.profile(),
+                        client.calls(),
+                        human,
+                    );
+                }
+                Ok(())
             }
-            Ok(())
-        }
+            AccountCommand::Pricing {
+                product_type,
+                category,
+                action,
+                product,
+            } => {
+                let query = PricingQuery {
+                    product_type: product_type.clone(),
+                    category: category.clone(),
+                    action: action.clone(),
+                    product: product.clone(),
+                };
+                let cache_dir = dirs::cache_dir().map(|d| d.join("ncheap"));
+                let (rows, _cached) =
+                    commands::account::pricing(&client, &query, cache_dir.as_deref())?;
+                output::success(
+                    cli.json,
+                    name,
+                    &rows,
+                    client.profile(),
+                    client.calls(),
+                    || commands::account::render_pricing(&rows),
+                );
+                Ok(())
+            }
+        },
         Command::Dns {
             command: DnsCommand::Get { domain },
         } => {
             let dns = commands::dns::get(&client, domain)?;
             output::success(
                 cli.json,
-                "dns.get",
+                name,
                 &dns,
                 client.profile(),
                 client.calls(),
                 || commands::dns::render(&dns),
+            );
+            Ok(())
+        }
+        Command::Privacy {
+            command: PrivacyCommand::List,
+        } => {
+            let subs = commands::privacy::list(&client)?;
+            output::success(
+                cli.json,
+                name,
+                &subs,
+                client.profile(),
+                client.calls(),
+                || commands::privacy::render_table(&subs),
             );
             Ok(())
         }

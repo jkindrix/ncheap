@@ -1,3 +1,6 @@
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -73,5 +76,189 @@ pub fn render(b: &Balances, full: bool) {
         println!("withdrawable_amount: {}", b.withdrawable_amount);
     } else {
         println!("(amounts redacted; pass --full to show them)");
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetPricingResponse {
+    #[serde(rename = "UserGetPricingResult", default)]
+    result: PricingResultXml,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PricingResultXml {
+    #[serde(rename = "ProductType", default)]
+    types: Vec<ProductTypeXml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProductTypeXml {
+    #[serde(rename = "@Name")]
+    name: String,
+    #[serde(rename = "ProductCategory", default)]
+    categories: Vec<ProductCategoryXml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProductCategoryXml {
+    #[serde(rename = "@Name")]
+    name: String,
+    #[serde(rename = "Product", default)]
+    products: Vec<ProductXml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProductXml {
+    #[serde(rename = "@Name")]
+    name: String,
+    #[serde(rename = "Price", default)]
+    prices: Vec<PriceXml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PriceXml {
+    #[serde(rename = "@Duration", default)]
+    duration: String,
+    #[serde(rename = "@DurationType", default)]
+    duration_type: String,
+    #[serde(rename = "@Price", default)]
+    price: String,
+    #[serde(rename = "@RegularPrice", default)]
+    regular_price: String,
+    #[serde(rename = "@YourPrice", default)]
+    your_price: String,
+    #[serde(rename = "@CouponPrice", default)]
+    coupon_price: String,
+    #[serde(rename = "@Currency", default)]
+    currency: String,
+}
+
+/// One flattened pricing entry: the nested ProductType > ProductCategory >
+/// Product > Price tree as agent-friendly rows.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PriceRow {
+    pub product_type: String,
+    pub category: String,
+    pub product: String,
+    pub duration: String,
+    pub duration_type: String,
+    pub price: String,
+    pub regular_price: String,
+    pub your_price: String,
+    pub coupon_price: String,
+    pub currency: String,
+}
+
+#[derive(Debug)]
+pub struct PricingQuery {
+    pub product_type: String,
+    pub category: Option<String>,
+    pub action: Option<String>,
+    pub product: Option<String>,
+}
+
+impl PricingQuery {
+    fn cache_file_name(&self) -> String {
+        let mut key = format!(
+            "pricing-{}-{}-{}-{}",
+            self.product_type,
+            self.category.as_deref().unwrap_or(""),
+            self.action.as_deref().unwrap_or(""),
+            self.product.as_deref().unwrap_or("")
+        )
+        .to_ascii_lowercase();
+        key.retain(|c| c.is_ascii_alphanumeric() || c == '-');
+        format!("{key}.json")
+    }
+}
+
+/// The API docs strongly recommend caching getPricing responses.
+const PRICING_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Returns the rows and whether they came from cache (api_calls stays 0 on a
+/// hit). Cache failures of any kind fall back to a live fetch; cache writes
+/// are best-effort.
+pub fn pricing<T: Transport>(
+    client: &Client<T>,
+    query: &PricingQuery,
+    cache_dir: Option<&Path>,
+) -> Result<(Vec<PriceRow>, bool), Error> {
+    let cache_path: Option<PathBuf> = cache_dir.map(|d| d.join(query.cache_file_name()));
+    if let Some(path) = &cache_path
+        && let Some(rows) = read_cache(path)
+    {
+        return Ok((rows, true));
+    }
+
+    let mut params: Vec<(&str, &str)> = vec![("ProductType", query.product_type.as_str())];
+    if let Some(v) = &query.category {
+        params.push(("ProductCategory", v));
+    }
+    if let Some(v) = &query.action {
+        params.push(("ActionName", v));
+    }
+    if let Some(v) = &query.product {
+        params.push(("ProductName", v));
+    }
+    let body = client.call("users.getPricing", &params)?;
+    let resp: GetPricingResponse = xml::parse(&body)?;
+
+    let mut rows = Vec::new();
+    for t in resp.result.types {
+        for c in t.categories {
+            for p in c.products {
+                for price in p.prices {
+                    rows.push(PriceRow {
+                        product_type: t.name.clone(),
+                        category: c.name.clone(),
+                        product: p.name.clone(),
+                        duration: price.duration,
+                        duration_type: price.duration_type,
+                        price: price.price,
+                        regular_price: price.regular_price,
+                        your_price: price.your_price,
+                        coupon_price: price.coupon_price,
+                        currency: price.currency,
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(path) = &cache_path {
+        write_cache(path, &rows);
+    }
+    Ok((rows, false))
+}
+
+fn read_cache(path: &Path) -> Option<Vec<PriceRow>> {
+    let meta = std::fs::metadata(path).ok()?;
+    let age = meta.modified().ok()?.elapsed().ok()?;
+    if age > PRICING_CACHE_TTL {
+        return None;
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn write_cache(path: &Path, rows: &[PriceRow]) {
+    let Ok(body) = serde_json::to_string(rows) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, body);
+}
+
+pub fn render_pricing(rows: &[PriceRow]) {
+    println!(
+        "{:<14} {:<12} {:<12} {:<5} {:<10} {:<10} CURRENCY",
+        "TYPE", "CATEGORY", "PRODUCT", "DUR", "PRICE", "YOURS"
+    );
+    for r in rows {
+        println!(
+            "{:<14} {:<12} {:<12} {:<5} {:<10} {:<10} {}",
+            r.product_type, r.category, r.product, r.duration, r.price, r.your_price, r.currency
+        );
     }
 }

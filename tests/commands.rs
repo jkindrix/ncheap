@@ -2,7 +2,7 @@ mod common;
 
 use common::{FakeTransport, param, test_profile};
 use ncheap::api::Client;
-use ncheap::commands::{account, dns, domains};
+use ncheap::commands::{account, dns, domains, privacy};
 
 fn envelope(command: &str, inner: &str) -> String {
     format!(
@@ -289,4 +289,115 @@ fn dns_get_parses_lowercase_host_elements_from_live_api() {
     assert_eq!(hosts.len(), 2, "lowercase <host> elements must parse");
     assert_eq!(hosts[0].record_type, "CNAME");
     assert_eq!(hosts[1].record_type, "URL");
+}
+
+#[test]
+fn privacy_list_paginates_and_parses() {
+    fn privacy_page(ids: &[u32], total: usize) -> String {
+        let subs: String = ids
+            .iter()
+            .map(|i| {
+                format!(
+                    r#"<Whoisguard ID="{i}" DomainName="d{i}.example" Created="05/13/2025" Expires="05/13/2027" Status="ENABLED" />"#
+                )
+            })
+            .collect();
+        format!(
+            r#"<WhoisguardGetListResult>{subs}</WhoisguardGetListResult>
+<Paging><TotalItems>{total}</TotalItems><CurrentPage>1</CurrentPage><PageSize>100</PageSize></Paging>"#
+        )
+    }
+    let first: Vec<u32> = (0..100).collect();
+    let second: Vec<u32> = (100..124).collect();
+    let transport = FakeTransport::new(vec![
+        envelope("whoisguard.getList", &privacy_page(&first, 124)),
+        envelope("whoisguard.getList", &privacy_page(&second, 124)),
+    ]);
+    let client = Client::new(transport, test_profile());
+
+    let subs = privacy::list(&client).expect("privacy list should succeed");
+
+    assert_eq!(subs.len(), 124, "all subscriptions must survive pagination");
+    assert_eq!(subs[0].status, "ENABLED");
+    assert_eq!(subs[123].domain_name, "d123.example");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        param(&requests[0], "Command"),
+        Some("namecheap.whoisguard.getList")
+    );
+    assert_eq!(param(&requests[1], "Page"), Some("2"));
+}
+
+fn pricing_inner() -> &'static str {
+    r#"
+<UserGetPricingResult>
+  <ProductType Name="DOMAIN">
+    <ProductCategory Name="REGISTER">
+      <Product Name="biz">
+        <Price Duration="1" DurationType="YEAR" Price="6.00" RegularPrice="8.55" YourPrice="6.00" CouponPrice="" Currency="USD" />
+        <Price Duration="2" DurationType="YEAR" Price="8.87" RegularPrice="8.87" YourPrice="8.87" CouponPrice="" Currency="USD" />
+      </Product>
+    </ProductCategory>
+    <ProductCategory Name="RENEW">
+      <Product Name="biz">
+        <Price Duration="1" DurationType="YEAR" Price="9.99" RegularPrice="9.99" YourPrice="9.99" CouponPrice="" Currency="USD" />
+      </Product>
+    </ProductCategory>
+  </ProductType>
+</UserGetPricingResult>"#
+}
+
+#[test]
+fn pricing_flattens_nested_tree_and_sends_filters() {
+    let transport = FakeTransport::new(vec![envelope("users.getPricing", pricing_inner())]);
+    let client = Client::new(transport, test_profile());
+    let query = account::PricingQuery {
+        product_type: "DOMAIN".into(),
+        category: None,
+        action: Some("REGISTER".into()),
+        product: Some("biz".into()),
+    };
+
+    let (rows, cached) = account::pricing(&client, &query, None).expect("pricing should succeed");
+
+    assert!(!cached);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].category, "REGISTER");
+    assert_eq!(rows[0].your_price, "6.00");
+    assert_eq!(rows[2].category, "RENEW");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(param(&requests[0], "ProductType"), Some("DOMAIN"));
+    assert_eq!(param(&requests[0], "ActionName"), Some("REGISTER"));
+    assert_eq!(param(&requests[0], "ProductName"), Some("biz"));
+    assert_eq!(param(&requests[0], "ProductCategory"), None);
+}
+
+#[test]
+fn pricing_second_call_hits_cache_without_api_call() {
+    let cache_dir = std::env::temp_dir().join(format!("ncheap-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    let transport = FakeTransport::new(vec![envelope("users.getPricing", pricing_inner())]);
+    let client = Client::new(transport, test_profile());
+    let query = account::PricingQuery {
+        product_type: "DOMAIN".into(),
+        category: None,
+        action: None,
+        product: None,
+    };
+
+    let (rows, cached) = account::pricing(&client, &query, Some(&cache_dir)).expect("first call");
+    assert!(!cached);
+    assert_eq!(client.calls(), 1);
+    assert_eq!(rows.len(), 3);
+
+    // Second call: no fixture responses remain, so any API call would error.
+    let (rows2, cached2) =
+        account::pricing(&client, &query, Some(&cache_dir)).expect("second call");
+    assert!(cached2, "second call must come from cache");
+    assert_eq!(client.calls(), 1, "no additional API call");
+    assert_eq!(rows2.len(), rows.len());
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
 }

@@ -51,7 +51,9 @@ ncheap domains info example.com        # registration, privacy, DNS details
 ncheap domains lock example.com        # registrar (transfer) lock status
 ncheap domains contacts example.com    # contacts; PII redacted unless --full
 ncheap dns get example.com             # nameserver mode + host records
+ncheap privacy list                    # domain privacy subscriptions
 ncheap account balances                # amounts redacted unless --full
+ncheap account pricing --action REGISTER --product com   # cached 24h
 ```
 
 Any command takes `--json` for the machine-readable envelope. Domains for

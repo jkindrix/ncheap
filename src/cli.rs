@@ -32,6 +32,43 @@ pub enum Command {
         #[command(subcommand)]
         command: DnsCommand,
     },
+    /// Domain privacy operations
+    Privacy {
+        #[command(subcommand)]
+        command: PrivacyCommand,
+    },
+}
+
+impl Command {
+    /// The command name used in the JSON envelope; the single source of
+    /// truth so main's error path and success path cannot drift apart.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Domains { command } => match command {
+                DomainsCommand::List => "domains.list",
+                DomainsCommand::Check { .. } => "domains.check",
+                DomainsCommand::Lock { .. } => "domains.lock",
+                DomainsCommand::Info { .. } => "domains.info",
+                DomainsCommand::Contacts { .. } => "domains.contacts",
+            },
+            Command::Account { command } => match command {
+                AccountCommand::Balances { .. } => "account.balances",
+                AccountCommand::Pricing { .. } => "account.pricing",
+            },
+            Command::Dns {
+                command: DnsCommand::Get { .. },
+            } => "dns.get",
+            Command::Privacy {
+                command: PrivacyCommand::List,
+            } => "privacy.list",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum PrivacyCommand {
+    /// List all domain privacy subscriptions (auto-paginated)
+    List,
 }
 
 #[derive(Subcommand)]
@@ -70,5 +107,20 @@ pub enum AccountCommand {
         /// Show exact balance amounts
         #[arg(long)]
         full: bool,
+    },
+    /// Show product pricing (response cached locally for 24h)
+    Pricing {
+        /// Product type (DOMAIN, SSLCERTIFICATE)
+        #[arg(long = "type", default_value = "DOMAIN")]
+        product_type: String,
+        /// Product category filter (e.g. DOMAINS)
+        #[arg(long)]
+        category: Option<String>,
+        /// Action filter (e.g. REGISTER, RENEW, TRANSFER)
+        #[arg(long)]
+        action: Option<String>,
+        /// Product name filter (e.g. com)
+        #[arg(long)]
+        product: Option<String>,
     },
 }

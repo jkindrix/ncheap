@@ -57,6 +57,8 @@ ncheap privacy list                    # domain privacy subscriptions
 ncheap privacy enable example.com --forward-to you@example.org   # mutating
 ncheap privacy disable example.com     # mutating
 ncheap account balances                # amounts redacted unless --full
+ncheap domains register new.com --max-price 15 --contacts-from owned.com
+ncheap domains renew owned.com --max-price 20   # both mutating, price-guarded
 ncheap account pricing --action REGISTER --product com   # cached 24h
 ncheap raw domains.getTldList          # direct API call, raw XML out
 ncheap raw domains.getInfo --param DomainName=example.com
@@ -127,7 +129,15 @@ tag. CI builds the binaries, checksums, and installer.
 - The API key is never written to logs, error messages, or request traces.
   Requests are sent as POST with a form body, so the key never appears in a
   URL; the HTTP agent is HTTPS-only and follows no redirects.
-- Mutating commands (`dns set`, `privacy enable/disable`) are enforced at the client layer,
+- Purchasing commands (`domains register`, `domains renew`) additionally
+  require `--max-price` and refuse pre-flight if the **live** listed price
+  exceeds it — the pricing cache is never consulted for purchase decisions.
+  Registration contacts are copied from an owned domain (`--contacts-from`);
+  ncheap stores no contact data. Premium domains are refused. The actual
+  charge can exceed the listed price slightly (ICANN fees); both figures are
+  reported in the result.
+- Mutating commands (`dns set`, `privacy enable/disable`, `domains
+  register/renew`) are enforced at the client layer,
   not per-command: they are refused against production unless the profile
   sets `allow_production_mutations = true` **in the config file** (the
   environment deliberately cannot arm this), they require `--yes`

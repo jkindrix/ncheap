@@ -782,3 +782,164 @@ fn privacy_enable_is_gated_on_production_without_opt_in() {
         "read allowed, mutation refused before transport"
     );
 }
+
+// --- register / renew price guards ---
+
+fn check_available_inner(domain: &str, premium: bool) -> String {
+    format!(
+        r#"<DomainCheckResult Domain="{domain}" Available="true" ErrorNo="0" Description="" IsPremiumName="{premium}" PremiumRegistrationPrice="0" PremiumRenewalPrice="0" PremiumRestorePrice="0" PremiumTransferPrice="0" IcannFee="0" EapFee="0"/>"#
+    )
+}
+
+fn pricing_com_inner(action: &str, your_price: &str) -> String {
+    format!(
+        r#"<UserGetPricingResult>
+  <ProductType Name="domains">
+    <ProductCategory Name="{action}">
+      <Product Name="com">
+        <Price Duration="1" DurationType="YEAR" Price="{your_price}" RegularPrice="{your_price}" YourPrice="{your_price}" CouponPrice="" Currency="USD" />
+      </Product>
+    </ProductCategory>
+  </ProductType>
+</UserGetPricingResult>"#
+    )
+}
+
+fn contacts_inner(domain: &str) -> String {
+    let c = contact_xml("owner@example.org");
+    format!(
+        r#"<DomainContactsResult Domain="{domain}" domainnameid="1">
+  <Registrant ReadOnly="false">{c}</Registrant>
+  <Tech ReadOnly="false">{c}</Tech>
+  <Admin ReadOnly="false">{c}</Admin>
+  <AuxBilling ReadOnly="false">{c}</AuxBilling>
+</DomainContactsResult>"#
+    )
+}
+
+#[test]
+fn register_happy_path_guards_then_mutates() {
+    let create_inner = r#"<DomainCreateResult Domain="newdomain.com" Registered="true" ChargedAmount="14.1800" DomainID="42" OrderID="7" TransactionID="9" WhoisguardEnable="false" NonRealTimeDomain="false"/>"#;
+    let transport = FakeTransport::new(vec![
+        envelope(
+            "domains.check",
+            &check_available_inner("newdomain.com", false),
+        ),
+        envelope("users.getPricing", &pricing_com_inner("register", "11.28")),
+        envelope("domains.getContacts", &contacts_inner("owned.com")),
+        envelope("domains.create", create_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result =
+        domains::register(&client, "newdomain.com", 1, 15.0, "owned.com").expect("register");
+
+    assert!(result.registered);
+    assert_eq!(result.listed_price, "11.28");
+    assert_eq!(result.charged_amount, "14.1800");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 4, "check, pricing, contacts, create");
+    let create = &requests[3];
+    assert_eq!(param(create, "Command"), Some("namecheap.domains.create"));
+    assert_eq!(param(create, "DomainName"), Some("newdomain.com"));
+    assert_eq!(param(create, "Years"), Some("1"));
+    assert_eq!(param(create, "RegistrantFirstName"), Some("John"));
+    assert_eq!(
+        param(create, "AuxBillingEmailAddress"),
+        Some("owner@example.org")
+    );
+}
+
+#[test]
+fn register_refuses_when_price_exceeds_cap_before_contacts_or_mutation() {
+    let transport = FakeTransport::new(vec![
+        envelope(
+            "domains.check",
+            &check_available_inner("newdomain.com", false),
+        ),
+        envelope("users.getPricing", &pricing_com_inner("register", "11.28")),
+    ]);
+    let client = test_client(transport);
+
+    let err =
+        domains::register(&client, "newdomain.com", 1, 10.0, "owned.com").expect_err("price guard");
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("exceeds --max-price"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        2,
+        "stops at the guard: no contacts read, no mutation"
+    );
+}
+
+#[test]
+fn register_refuses_unavailable_and_premium_domains() {
+    let taken = r#"<DomainCheckResult Domain="taken.com" Available="false" ErrorNo="0" Description="" IsPremiumName="false"/>"#;
+    let transport = FakeTransport::new(vec![envelope("domains.check", taken)]);
+    let client = test_client(transport);
+    let err = domains::register(&client, "taken.com", 1, 15.0, "owned.com").expect_err("taken");
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("not available"));
+
+    let transport = FakeTransport::new(vec![envelope(
+        "domains.check",
+        &check_available_inner("premium.com", true),
+    )]);
+    let client = test_client(transport);
+    let err = domains::register(&client, "premium.com", 1, 15.0, "owned.com").expect_err("premium");
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("premium"));
+}
+
+#[test]
+fn renew_guards_price_then_mutates() {
+    let renew_inner = r#"<DomainRenewResult DomainName="owned.com" DomainID="42" Renew="true" OrderID="7" TransactionID="9" ChargedAmount="14.9800"><DomainDetails><ExpiredDate>4/30/2028</ExpiredDate><NumYears>0</NumYears></DomainDetails></DomainRenewResult>"#;
+    let transport = FakeTransport::new(vec![
+        envelope("users.getPricing", &pricing_com_inner("renew", "14.98")),
+        envelope("domains.renew", renew_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = domains::renew(&client, "owned.com", 1, 20.0).expect("renew");
+
+    assert!(result.renewed);
+    assert_eq!(result.charged_amount, "14.9800");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(
+        param(&requests[1], "Command"),
+        Some("namecheap.domains.renew")
+    );
+
+    // and the refusal side
+    let transport = FakeTransport::new(vec![envelope(
+        "users.getPricing",
+        &pricing_com_inner("renew", "14.98"),
+    )]);
+    let client = test_client(transport);
+    let err = domains::renew(&client, "owned.com", 1, 10.0).expect_err("guard");
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(client.transport().requests.borrow().len(), 1, "no mutation");
+}
+
+#[test]
+fn register_is_gated_on_production_without_opt_in() {
+    let transport = FakeTransport::new(vec![
+        envelope(
+            "domains.check",
+            &check_available_inner("newdomain.com", false),
+        ),
+        envelope("users.getPricing", &pricing_com_inner("register", "11.28")),
+        envelope("domains.getContacts", &contacts_inner("owned.com")),
+    ]);
+    let client = gate_client(transport, false, false);
+
+    let err = domains::register(&client, "newdomain.com", 1, 15.0, "owned.com").expect_err("gated");
+
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        3,
+        "reads allowed, the create itself refused before transport"
+    );
+}

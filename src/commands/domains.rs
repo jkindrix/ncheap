@@ -548,3 +548,238 @@ pub fn render_table(domains: &[Domain]) {
         );
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct CreateResponse {
+    #[serde(rename = "DomainCreateResult")]
+    result: CreateXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateXml {
+    #[serde(rename = "@Domain", default)]
+    domain: String,
+    #[serde(rename = "@Registered", deserialize_with = "de_bool", default)]
+    registered: bool,
+    #[serde(rename = "@ChargedAmount", default)]
+    charged_amount: String,
+    #[serde(rename = "@DomainID", default)]
+    domain_id: String,
+    #[serde(rename = "@OrderID", default)]
+    order_id: String,
+    #[serde(rename = "@TransactionID", default)]
+    transaction_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterResult {
+    pub domain: String,
+    pub registered: bool,
+    pub years: u8,
+    /// The live listed price the guard approved, pre-purchase.
+    pub listed_price: String,
+    /// What Namecheap reports it actually charged.
+    pub charged_amount: String,
+    pub domain_id: String,
+    pub order_id: String,
+    pub transaction_id: String,
+}
+
+/// Register a domain (mutating, charges money). Guard order, all live and
+/// never cache-fed: availability check (premium refused), live price vs
+/// --max-price, contacts copied from an owned domain — only then call_mut.
+pub fn register<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    years: u8,
+    max_price: f64,
+    contacts_from: &str,
+) -> Result<RegisterResult, Error> {
+    let domain = crate::domain::normalize(domain)?;
+    let (_, tld) = crate::domain::split_sld_tld(&domain)?;
+
+    let availability = check(client, std::slice::from_ref(&domain))?;
+    let status = availability
+        .first()
+        .ok_or_else(|| Error::Parse("empty availability response".into()))?;
+    if !status.available {
+        return Err(Error::Usage(format!(
+            "{domain} is not available for registration"
+        )));
+    }
+    if status.is_premium {
+        return Err(Error::Usage(format!(
+            "{domain} is a premium domain; ncheap does not register premium domains"
+        )));
+    }
+
+    let listed = crate::commands::account::live_price(client, &tld, "REGISTER", years)?;
+    if listed > max_price {
+        return Err(Error::Usage(format!(
+            "listed price {listed:.2} for {years} year(s) exceeds --max-price {max_price:.2}; not registering"
+        )));
+    }
+
+    let source = contacts(client, contacts_from)?;
+    let mut params: Vec<(String, String)> = vec![
+        ("DomainName".into(), domain.clone()),
+        ("Years".into(), years.to_string()),
+        ("AddFreeWhoisguard".into(), "yes".into()),
+        ("WGEnabled".into(), "no".into()),
+    ];
+    for (role, contact) in [
+        ("Registrant", &source.registrant),
+        ("Tech", &source.tech),
+        ("Admin", &source.admin),
+        ("AuxBilling", &source.aux_billing),
+    ] {
+        contact_params(role, contact, &mut params);
+    }
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let body = client.call_mut("domains.create", &param_refs)?;
+    let resp: CreateResponse = xml::parse(&body)?;
+    Ok(RegisterResult {
+        domain: resp.result.domain,
+        registered: resp.result.registered,
+        years,
+        listed_price: format!("{listed:.2}"),
+        charged_amount: resp.result.charged_amount,
+        domain_id: resp.result.domain_id,
+        order_id: resp.result.order_id,
+        transaction_id: resp.result.transaction_id,
+    })
+}
+
+fn contact_params(role: &str, c: &Contact, out: &mut Vec<(String, String)>) {
+    let required = [
+        ("FirstName", &c.first_name),
+        ("LastName", &c.last_name),
+        ("Address1", &c.address1),
+        ("City", &c.city),
+        ("StateProvince", &c.state_province),
+        ("PostalCode", &c.postal_code),
+        ("Country", &c.country),
+        ("Phone", &c.phone),
+        ("EmailAddress", &c.email_address),
+    ];
+    for (key, value) in required {
+        out.push((format!("{role}{key}"), value.clone()));
+    }
+    let optional = [
+        ("OrganizationName", &c.organization_name),
+        ("JobTitle", &c.job_title),
+        ("Address2", &c.address2),
+        ("PhoneExt", &c.phone_ext),
+        ("Fax", &c.fax),
+    ];
+    for (key, value) in optional {
+        if !value.is_empty() {
+            out.push((format!("{role}{key}"), value.clone()));
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenewResponse {
+    #[serde(rename = "DomainRenewResult")]
+    result: RenewXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenewXml {
+    #[serde(rename = "@DomainName", default)]
+    domain_name: String,
+    #[serde(rename = "@Renew", deserialize_with = "de_bool", default)]
+    renew: bool,
+    #[serde(rename = "@ChargedAmount", default)]
+    charged_amount: String,
+    #[serde(rename = "@DomainID", default)]
+    domain_id: String,
+    #[serde(rename = "@OrderID", default)]
+    order_id: String,
+    #[serde(rename = "@TransactionID", default)]
+    transaction_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RenewResult {
+    pub domain: String,
+    pub renewed: bool,
+    pub years: u8,
+    pub listed_price: String,
+    pub charged_amount: String,
+    pub domain_id: String,
+    pub order_id: String,
+    pub transaction_id: String,
+}
+
+/// Renew a domain (mutating, charges money). Live price guard, then call_mut.
+pub fn renew<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    years: u8,
+    max_price: f64,
+) -> Result<RenewResult, Error> {
+    let domain = crate::domain::normalize(domain)?;
+    let (_, tld) = crate::domain::split_sld_tld(&domain)?;
+
+    let listed = crate::commands::account::live_price(client, &tld, "RENEW", years)?;
+    if listed > max_price {
+        return Err(Error::Usage(format!(
+            "listed price {listed:.2} for {years} year(s) exceeds --max-price {max_price:.2}; not renewing"
+        )));
+    }
+
+    let years_str = years.to_string();
+    let body = client.call_mut(
+        "domains.renew",
+        &[
+            ("DomainName", domain.as_str()),
+            ("Years", years_str.as_str()),
+        ],
+    )?;
+    let resp: RenewResponse = xml::parse(&body)?;
+    Ok(RenewResult {
+        domain: resp.result.domain_name,
+        renewed: resp.result.renew,
+        years,
+        listed_price: format!("{listed:.2}"),
+        charged_amount: resp.result.charged_amount,
+        domain_id: resp.result.domain_id,
+        order_id: resp.result.order_id,
+        transaction_id: resp.result.transaction_id,
+    })
+}
+
+pub fn render_register(r: &RegisterResult) {
+    println!(
+        "{}: {} for {} year(s) — listed {}, charged {} (order {}, transaction {})",
+        r.domain,
+        if r.registered {
+            "registered"
+        } else {
+            "NOT registered"
+        },
+        r.years,
+        r.listed_price,
+        r.charged_amount,
+        r.order_id,
+        r.transaction_id,
+    );
+}
+
+pub fn render_renew(r: &RenewResult) {
+    println!(
+        "{}: {} for {} year(s) — listed {}, charged {} (order {}, transaction {})",
+        r.domain,
+        if r.renewed { "renewed" } else { "NOT renewed" },
+        r.years,
+        r.listed_price,
+        r.charged_amount,
+        r.order_id,
+        r.transaction_id,
+    );
+}

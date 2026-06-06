@@ -149,6 +149,58 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 }
                 Ok(())
             }
+            DomainsCommand::Register {
+                domain,
+                years,
+                max_price,
+                contacts_from,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!(
+                        "register {domain} for {years} year(s) at up to {max_price:.2}, \
+                         contacts copied from {contacts_from}"
+                    ),
+                    *yes,
+                )?;
+                let result = commands::domains::register(
+                    &client,
+                    domain,
+                    *years,
+                    *max_price,
+                    contacts_from,
+                )?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::domains::render_register(&result),
+                );
+                Ok(())
+            }
+            DomainsCommand::Renew {
+                domain,
+                years,
+                max_price,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!("renew {domain} for {years} year(s) at up to {max_price:.2}"),
+                    *yes,
+                )?;
+                let result = commands::domains::renew(&client, domain, *years, *max_price)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::domains::render_renew(&result),
+                );
+                Ok(())
+            }
         },
         Command::Account { command } => match command {
             AccountCommand::Balances { full } => {

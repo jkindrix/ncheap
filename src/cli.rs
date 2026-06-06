@@ -58,6 +58,8 @@ impl Command {
                 DomainsCommand::Lock { .. } => "domains.lock",
                 DomainsCommand::Info { .. } => "domains.info",
                 DomainsCommand::Contacts { .. } => "domains.contacts",
+                DomainsCommand::Register { .. } => "domains.register",
+                DomainsCommand::Renew { .. } => "domains.renew",
             },
             Command::Account { command } => match command {
                 AccountCommand::Balances { .. } => "account.balances",
@@ -136,6 +138,35 @@ pub enum DomainsCommand {
         /// Show the actual contact fields
         #[arg(long)]
         full: bool,
+    },
+    /// Register a domain (mutating, charges money; live price guard)
+    Register {
+        domain: String,
+        /// Registration period in years
+        #[arg(long, default_value_t = 1)]
+        years: u8,
+        /// Refuse if the live listed price exceeds this amount (required)
+        #[arg(long)]
+        max_price: f64,
+        /// Owned domain whose contacts are copied for the registration
+        #[arg(long)]
+        contacts_from: String,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Renew a domain (mutating, charges money; live price guard)
+    Renew {
+        domain: String,
+        /// Renewal period in years
+        #[arg(long, default_value_t = 1)]
+        years: u8,
+        /// Refuse if the live listed price exceeds this amount (required)
+        #[arg(long)]
+        max_price: f64,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
     },
 }
 

@@ -268,3 +268,35 @@ pub fn render_pricing(rows: &[PriceRow]) {
         );
     }
 }
+
+/// Live price for one TLD/action/duration — used by purchase guards, which
+/// must never read the cache: a stale or contaminated price cannot be
+/// allowed to justify a charge.
+pub fn live_price<T: Transport>(
+    client: &Client<T>,
+    tld: &str,
+    action: &str,
+    years: u8,
+) -> Result<f64, Error> {
+    let query = PricingQuery {
+        product_type: "DOMAIN".into(),
+        category: None,
+        action: Some(action.into()),
+        product: Some(tld.into()),
+    };
+    let (rows, _) = pricing(client, &query, None)?;
+    let row = rows
+        .iter()
+        .find(|r| r.duration == years.to_string() && r.duration_type.eq_ignore_ascii_case("YEAR"))
+        .ok_or_else(|| {
+            Error::Usage(format!(
+                "no {action} pricing found for .{tld} at {years} year(s); cannot price-guard the purchase"
+            ))
+        })?;
+    row.your_price.parse::<f64>().map_err(|_| {
+        Error::Parse(format!(
+            "unparseable price {:?} for .{tld}; cannot price-guard the purchase",
+            row.your_price
+        ))
+    })
+}

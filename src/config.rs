@@ -63,6 +63,7 @@ pub struct ProfileFile {
     pub username: Option<String>,
     pub client_ip: Option<String>,
     pub sandbox: Option<bool>,
+    pub allow_production_mutations: Option<bool>,
 }
 
 /// Fully resolved credentials for one environment.
@@ -74,6 +75,9 @@ pub struct Profile {
     pub username: String,
     pub client_ip: String,
     pub sandbox: bool,
+    /// Mutating API calls against production are refused unless this is
+    /// explicitly set (sandbox profiles may always mutate).
+    pub allow_production_mutations: bool,
 }
 
 impl Profile {
@@ -150,6 +154,11 @@ pub fn resolve(
         Some(v) => parse_bool(&v).ok_or_else(|| ConfigError::Invalid("NCHEAP_SANDBOX".into()))?,
         None => base.sandbox.unwrap_or(false),
     };
+    let allow_production_mutations = match env("NCHEAP_ALLOW_PRODUCTION_MUTATIONS") {
+        Some(v) => parse_bool(&v)
+            .ok_or_else(|| ConfigError::Invalid("NCHEAP_ALLOW_PRODUCTION_MUTATIONS".into()))?,
+        None => base.allow_production_mutations.unwrap_or(false),
+    };
     let api_user = env("NCHEAP_API_USER").or(base.api_user);
     let api_key = env("NCHEAP_API_KEY").map(Secret::new).or(base.api_key);
     let client_ip = env("NCHEAP_CLIENT_IP").or(base.client_ip);
@@ -177,6 +186,7 @@ pub fn resolve(
         api_key: api_key.expect("checked above"),
         client_ip: client_ip.expect("checked above"),
         sandbox,
+        allow_production_mutations,
     })
 }
 
@@ -275,6 +285,24 @@ mod tests {
         assert!(msg.contains("api_key"));
         assert!(msg.contains("client_ip"));
         assert!(!msg.contains("api_user ("));
+    }
+
+    #[test]
+    fn allow_production_mutations_resolves_from_file_and_env() {
+        let mut file = sample_file();
+        file.profile
+            .get_mut("production")
+            .unwrap()
+            .allow_production_mutations = Some(true);
+        let p = resolve(Some(file), None, &env_of(&[])).unwrap();
+        assert!(p.allow_production_mutations);
+
+        let p = resolve(Some(sample_file()), None, &env_of(&[])).unwrap();
+        assert!(!p.allow_production_mutations, "defaults to false");
+
+        let env = env_of(&[("NCHEAP_ALLOW_PRODUCTION_MUTATIONS", "true")]);
+        let p = resolve(Some(sample_file()), None, &env).unwrap();
+        assert!(p.allow_production_mutations, "env overrides");
     }
 
     #[test]

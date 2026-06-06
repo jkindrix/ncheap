@@ -1,22 +1,5 @@
 use crate::api::xml;
-use crate::api::{Client, Error, Transport};
-
-/// The only methods `raw` will call: every read-only method Phase 1 wraps,
-/// plus domains.getTldList. Mutating methods stay out until the sandbox-gated
-/// write path exists. Lowercase canonical, no "namecheap." prefix.
-const READ_ONLY_ALLOWLIST: &[&str] = &[
-    "domains.getlist",
-    "domains.check",
-    "domains.getregistrarlock",
-    "domains.getinfo",
-    "domains.getcontacts",
-    "domains.gettldlist",
-    "domains.dns.getlist",
-    "domains.dns.gethosts",
-    "whoisguard.getlist",
-    "users.getbalances",
-    "users.getpricing",
-];
+use crate::api::{Client, Error, READ_ONLY_COMMANDS, Transport, canonical_command};
 
 /// Global params the client sets itself; user-supplied copies are rejected
 /// rather than appended (a duplicate Command param could bypass the
@@ -47,15 +30,13 @@ pub fn call<T: Transport>(
     command: &str,
     params: &[(String, String)],
 ) -> Result<String, Error> {
-    let canonical = command
-        .strip_prefix("namecheap.")
-        .or_else(|| command.strip_prefix("Namecheap."))
-        .unwrap_or(command)
-        .to_ascii_lowercase();
-    if !READ_ONLY_ALLOWLIST.contains(&canonical.as_str()) {
+    // Client::call enforces the same list fail-closed; checking here too
+    // gives raw's callers a usage error (exit 2) with the full list.
+    let canonical = canonical_command(command);
+    if !READ_ONLY_COMMANDS.contains(&canonical.as_str()) {
         return Err(Error::Usage(format!(
             "{command:?} is not on the read-only allowlist; allowed: {}",
-            READ_ONLY_ALLOWLIST.join(", ")
+            READ_ONLY_COMMANDS.join(", ")
         )));
     }
     let params: Vec<(&str, &str)> = params

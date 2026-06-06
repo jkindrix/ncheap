@@ -80,7 +80,7 @@ fn requests_carry_auth_pagination_and_prefixed_command() {
     let requests = client.transport().requests.borrow();
     assert_eq!(requests.len(), 2);
     let first = &requests[0];
-    assert_eq!(param(first, "Command"), Some("namecheap.domains.getList"));
+    assert_eq!(param(first, "Command"), Some("namecheap.domains.getlist"));
     assert_eq!(param(first, "ApiUser"), Some("testuser"));
     assert_eq!(param(first, "ApiKey"), Some("testkey"));
     assert_eq!(param(first, "UserName"), Some("testuser"));

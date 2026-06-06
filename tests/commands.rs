@@ -1,6 +1,7 @@
 mod common;
 
-use common::{FakeTransport, param, test_client};
+use common::{FakeTransport, param, test_client, test_profile};
+use ncheap::api::Client;
 use ncheap::commands::{account, dns, domains, privacy, raw};
 
 fn envelope(command: &str, inner: &str) -> String {
@@ -66,7 +67,7 @@ fn lock_status_parses_capitalized_boolean() {
     let requests = client.transport().requests.borrow();
     assert_eq!(
         param(&requests[0], "Command"),
-        Some("namecheap.domains.getRegistrarLock")
+        Some("namecheap.domains.getregistrarlock")
     );
     assert_eq!(param(&requests[0], "DomainName"), Some("domain1.example"));
 }
@@ -143,7 +144,7 @@ fn dns_get_fetches_hosts_when_namecheap_is_authoritative() {
     assert_eq!(param(&requests[0], "TLD"), Some("com"));
     assert_eq!(
         param(&requests[1], "Command"),
-        Some("namecheap.domains.dns.getHosts")
+        Some("namecheap.domains.dns.gethosts")
     );
 }
 
@@ -323,7 +324,7 @@ fn privacy_list_paginates_and_parses() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         param(&requests[0], "Command"),
-        Some("namecheap.whoisguard.getList")
+        Some("namecheap.whoisguard.getlist")
     );
     assert_eq!(param(&requests[1], "Page"), Some("2"));
 }
@@ -514,4 +515,82 @@ fn persistent_429_maps_to_rate_limited_exit_5() {
     assert_eq!(err.exit_code(), 5);
     assert_eq!(err.kind(), "rate_limit");
     assert_eq!(client.transport().requests.borrow().len(), 2);
+}
+
+// --- Mutation gate (Client::call / call_mut) ---
+
+fn profile_with(sandbox: bool, allow_mut: bool) -> ncheap::config::Profile {
+    let mut p = test_profile();
+    p.sandbox = sandbox;
+    p.allow_production_mutations = allow_mut;
+    p
+}
+
+fn gate_client(transport: FakeTransport, sandbox: bool, allow_mut: bool) -> Client<FakeTransport> {
+    let mut client = Client::new(transport, profile_with(sandbox, allow_mut));
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client
+}
+
+#[test]
+fn call_refuses_unknown_commands_fail_closed() {
+    let client = gate_client(FakeTransport::new(vec![]), true, false);
+
+    let err = client
+        .call("domains.dns.setHosts", &[])
+        .expect_err("read path must refuse non-read commands");
+
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(err.kind(), "config");
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+#[test]
+fn call_mut_is_refused_on_production_without_opt_in() {
+    let client = gate_client(FakeTransport::new(vec![]), false, false);
+
+    let err = client
+        .call_mut("domains.dns.setHosts", &[])
+        .expect_err("production mutation must be gated");
+
+    assert_eq!(err.exit_code(), 3);
+    assert!(err.to_string().contains("allow_production_mutations"));
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+#[test]
+fn call_mut_dispatches_on_sandbox_and_does_not_retry() {
+    use ncheap::api::TransportFailure;
+    // A 500 on a mutation must surface immediately, never re-submit.
+    let transport = FakeTransport::with_results(vec![Err(TransportFailure::Status(500))]);
+    let client = gate_client(transport, true, false);
+
+    let err = client
+        .call_mut("domains.dns.setHosts", &[("SLD", "d"), ("TLD", "com")])
+        .expect_err("500 surfaces");
+
+    assert_eq!(err.exit_code(), 4);
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "exactly one attempt: mutations never auto-retry"
+    );
+}
+
+#[test]
+fn call_mut_dispatches_on_production_with_explicit_opt_in() {
+    let inner = r#"<DomainDNSSetHostsResult Domain="d.com" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![envelope("domains.dns.setHosts", inner)]);
+    let client = gate_client(transport, false, true);
+
+    let body = client
+        .call_mut("domains.dns.setHosts", &[])
+        .expect("explicit opt-in permits production mutation");
+
+    assert!(body.contains("IsSuccess"));
+    let requests = client.transport().requests.borrow();
+    assert_eq!(
+        param(&requests[0], "Command"),
+        Some("namecheap.domains.dns.sethosts")
+    );
 }

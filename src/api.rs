@@ -15,6 +15,33 @@ const MIN_SPACING: Duration = Duration::from_millis(3100);
 /// rate-limit error shape, so this is conservative, not tuned.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
+/// Every read-only API method this tool may issue, lowercase canonical
+/// (no "namecheap." prefix). Client::call refuses anything not listed
+/// (fail-closed); mutating methods must go through Client::call_mut, which
+/// carries the production gate and never auto-retries.
+pub const READ_ONLY_COMMANDS: &[&str] = &[
+    "domains.getlist",
+    "domains.check",
+    "domains.getregistrarlock",
+    "domains.getinfo",
+    "domains.getcontacts",
+    "domains.gettldlist",
+    "domains.dns.getlist",
+    "domains.dns.gethosts",
+    "whoisguard.getlist",
+    "users.getbalances",
+    "users.getpricing",
+];
+
+/// Lowercase canonical command name: "namecheap." prefix stripped.
+pub fn canonical_command(command: &str) -> String {
+    let stripped = command
+        .strip_prefix("namecheap.")
+        .or_else(|| command.strip_prefix("Namecheap."))
+        .unwrap_or(command);
+    stripped.to_ascii_lowercase()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -29,6 +56,10 @@ pub enum Error {
     Parse(String),
     #[error("{0}")]
     Usage(String),
+    /// Refused by the safety policy (mutation gate); maps to the config
+    /// kind/exit-code so the external contract stays unchanged.
+    #[error("{0}")]
+    Policy(String),
 }
 
 impl Error {
@@ -36,7 +67,7 @@ impl Error {
         match self {
             Error::Api { .. } | Error::Parse(_) => 1,
             Error::Usage(_) => 2,
-            Error::Config(_) => 3,
+            Error::Config(_) | Error::Policy(_) => 3,
             Error::Transport(_) => 4,
             Error::RateLimited(_) => 5,
         }
@@ -47,7 +78,7 @@ impl Error {
             Error::Api { .. } => "api",
             Error::Parse(_) => "api",
             Error::Usage(_) => "usage",
-            Error::Config(_) => "config",
+            Error::Config(_) | Error::Policy(_) => "config",
             Error::Transport(_) => "transport",
             Error::RateLimited(_) => "rate_limit",
         }
@@ -160,19 +191,48 @@ impl<T: Transport> Client<T> {
         self.calls.get()
     }
 
-    /// Issue one API call. `command` may be short ("domains.getList"); the
-    /// "namecheap." prefix is added when absent. Returns the raw XML body.
+    /// Issue one read-only API call. `command` may be short
+    /// ("domains.getList") or "namecheap."-prefixed. Fail-closed: any
+    /// command not on READ_ONLY_COMMANDS is refused here — mutations must
+    /// use call_mut, which carries the production gate. Returns the raw
+    /// XML body. Retries once on HTTP 429/5xx (reads are idempotent).
     pub fn call(&self, command: &str, params: &[(&str, &str)]) -> Result<String, Error> {
-        let command = if command.starts_with("namecheap.") {
-            command.to_owned()
-        } else {
-            format!("namecheap.{command}")
-        };
+        let canonical = canonical_command(command);
+        if !READ_ONLY_COMMANDS.contains(&canonical.as_str()) {
+            return Err(Error::Policy(format!(
+                "{command:?} is not a known read-only command; \
+                 mutating commands must use the mutation path"
+            )));
+        }
+        self.dispatch(&canonical, params, true)
+    }
+
+    /// Issue one mutating API call. Never auto-retries (an ambiguous
+    /// failure after a mutation must surface, not double-submit), and is
+    /// gated: refused against production unless the profile explicitly
+    /// sets allow_production_mutations.
+    pub fn call_mut(&self, command: &str, params: &[(&str, &str)]) -> Result<String, Error> {
+        if !self.profile.sandbox && !self.profile.allow_production_mutations {
+            return Err(Error::Policy(
+                "mutations against production are disabled; use a sandbox profile \
+                 or set allow_production_mutations = true in this profile"
+                    .into(),
+            ));
+        }
+        self.dispatch(&canonical_command(command), params, false)
+    }
+
+    fn dispatch(
+        &self,
+        canonical: &str,
+        params: &[(&str, &str)],
+        retry: bool,
+    ) -> Result<String, Error> {
         let mut all: Vec<(String, String)> = vec![
             ("ApiUser".into(), self.profile.api_user.clone()),
             ("ApiKey".into(), self.profile.api_key.expose().to_owned()),
             ("UserName".into(), self.profile.username.clone()),
-            ("Command".into(), command),
+            ("Command".into(), format!("namecheap.{canonical}")),
             ("ClientIp".into(), self.profile.client_ip.clone()),
         ];
         all.extend(
@@ -185,7 +245,9 @@ impl<T: Transport> Client<T> {
         self.calls.set(self.calls.get() + 1);
         self.throttle();
         let mut attempt = self.transport.send(self.profile.endpoint(), &all);
-        if matches!(attempt, Err(TransportFailure::Status(code)) if code == 429 || code >= 500) {
+        if retry
+            && matches!(attempt, Err(TransportFailure::Status(code)) if code == 429 || code >= 500)
+        {
             thread::sleep(self.retry_backoff);
             self.throttle();
             attempt = self.transport.send(self.profile.endpoint(), &all);

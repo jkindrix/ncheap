@@ -90,3 +90,8 @@ any), and `message`.
   config, with `--yes` required for non-interactive use.
 - Client-side throttling spaces requests under Namecheap's 50/min key-wide
   rate limit, with backoff on HTTP 429/5xx.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.

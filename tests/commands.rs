@@ -694,3 +694,91 @@ fn api_error_with_junk_command_response_surfaces_the_real_error() {
     );
     assert!(err.to_string().contains("Not allowed host"));
 }
+
+fn privacy_list_page_with(domain: &str, id: &str) -> String {
+    envelope(
+        "whoisguard.getList",
+        &format!(
+            r#"<WhoisguardGetListResult>
+<Whoisguard ID="{id}" DomainName="{domain}" Created="05/13/2025" Expires="05/13/2027" Status="ENABLED" />
+</WhoisguardGetListResult>
+<Paging><TotalItems>1</TotalItems><CurrentPage>1</CurrentPage><PageSize>100</PageSize></Paging>"#
+        ),
+    )
+}
+
+#[test]
+fn privacy_enable_resolves_id_and_sends_forward_address() {
+    let enable_inner = r#"<WhoisguardEnableResult DomainName="d1.example" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![
+        privacy_list_page_with("d1.example", "5924316"),
+        envelope("whoisguard.enable", enable_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = privacy::enable(&client, "d1.example", "ops@example.org").expect("enable");
+
+    assert!(result.is_success);
+    assert!(result.enabled);
+    assert_eq!(result.privacy_id, "5924316");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 2, "one read to resolve, one mutation");
+    assert_eq!(
+        param(&requests[1], "Command"),
+        Some("namecheap.whoisguard.enable")
+    );
+    assert_eq!(param(&requests[1], "WhoisguardID"), Some("5924316"));
+    assert_eq!(
+        param(&requests[1], "ForwardedToEmail"),
+        Some("ops@example.org")
+    );
+}
+
+#[test]
+fn privacy_disable_resolves_id() {
+    let disable_inner = r#"<WhoisguardDisableResult DomainName="d1.example" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![
+        privacy_list_page_with("d1.example", "5924316"),
+        envelope("whoisguard.disable", disable_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = privacy::disable(&client, "d1.example").expect("disable");
+
+    assert!(result.is_success);
+    assert!(!result.enabled);
+    let requests = client.transport().requests.borrow();
+    assert_eq!(param(&requests[1], "WhoisguardID"), Some("5924316"));
+    assert_eq!(param(&requests[1], "ForwardedToEmail"), None);
+}
+
+#[test]
+fn privacy_enable_without_subscription_is_a_usage_error() {
+    let transport = FakeTransport::new(vec![privacy_list_page_with("other.example", "111")]);
+    let client = test_client(transport);
+
+    let err = privacy::enable(&client, "d1.example", "ops@example.org").expect_err("no sub");
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("d1.example"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "only the resolution read, no mutation attempt"
+    );
+}
+
+#[test]
+fn privacy_enable_is_gated_on_production_without_opt_in() {
+    let transport = FakeTransport::new(vec![privacy_list_page_with("d1.example", "5924316")]);
+    let client = gate_client(transport, false, false);
+
+    let err = privacy::enable(&client, "d1.example", "ops@example.org").expect_err("gated");
+
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "read allowed, mutation refused before transport"
+    );
+}

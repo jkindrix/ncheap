@@ -54,6 +54,8 @@ ncheap domains contacts example.com    # contacts; PII redacted unless --full
 ncheap dns get example.com             # nameserver mode + host records
 ncheap dns set example.com ns1.host ns2.host   # mutating; see safety model
 ncheap privacy list                    # domain privacy subscriptions
+ncheap privacy enable example.com --forward-to you@example.org   # mutating
+ncheap privacy disable example.com     # mutating
 ncheap account balances                # amounts redacted unless --full
 ncheap account pricing --action REGISTER --product com   # cached 24h
 ncheap raw domains.getTldList          # direct API call, raw XML out
@@ -125,7 +127,7 @@ tag. CI builds the binaries, checksums, and installer.
 - The API key is never written to logs, error messages, or request traces.
   Requests are sent as POST with a form body, so the key never appears in a
   URL; the HTTP agent is HTTPS-only and follows no redirects.
-- Mutating commands (currently `dns set`) are enforced at the client layer,
+- Mutating commands (`dns set`, `privacy enable/disable`) are enforced at the client layer,
   not per-command: they are refused against production unless the profile
   sets `allow_production_mutations = true` **in the config file** (the
   environment deliberately cannot arm this), they require `--yes`

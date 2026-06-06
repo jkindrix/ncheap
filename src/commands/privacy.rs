@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::api::xml;
+use crate::api::xml::{self, de_bool};
 use crate::api::{Client, Error, Transport};
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +69,103 @@ pub fn list<T: Transport>(client: &Client<T>) -> Result<Vec<PrivacySubscription>
         }
         page += 1;
     }
+}
+
+/// The enable/disable API takes a WhoisguardID, not a domain; resolve it
+/// from the subscription list so callers can speak in domains.
+fn resolve_id<T: Transport>(client: &Client<T>, domain: &str) -> Result<String, Error> {
+    let normalized = crate::domain::normalize(domain)?;
+    let subs = list(client)?;
+    subs.iter()
+        .find(|s| s.domain_name.eq_ignore_ascii_case(&normalized))
+        .map(|s| s.id.clone())
+        .ok_or_else(|| {
+            Error::Usage(format!(
+                "no domain privacy subscription is associated with {normalized}"
+            ))
+        })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnableResponse {
+    #[serde(rename = "WhoisguardEnableResult")]
+    result: ToggleXml,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DisableResponse {
+    #[serde(rename = "WhoisguardDisableResult")]
+    result: ToggleXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToggleXml {
+    #[serde(rename = "@DomainName", default)]
+    domain_name: String,
+    #[serde(rename = "@IsSuccess", deserialize_with = "de_bool", default)]
+    is_success: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToggleResult {
+    pub domain: String,
+    pub privacy_id: String,
+    pub enabled: bool,
+    pub is_success: bool,
+}
+
+/// Enable privacy (mutating). `forward_to` is required by the API and
+/// deliberately never defaulted by ncheap.
+pub fn enable<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    forward_to: &str,
+) -> Result<ToggleResult, Error> {
+    let id = resolve_id(client, domain)?;
+    let body = client.call_mut(
+        "whoisguard.enable",
+        &[
+            ("WhoisguardID", id.as_str()),
+            ("ForwardedToEmail", forward_to),
+        ],
+    )?;
+    let resp: EnableResponse = xml::parse(&body)?;
+    Ok(ToggleResult {
+        domain: resp.result.domain_name,
+        privacy_id: id,
+        enabled: true,
+        is_success: resp.result.is_success,
+    })
+}
+
+/// Disable privacy (mutating).
+pub fn disable<T: Transport>(client: &Client<T>, domain: &str) -> Result<ToggleResult, Error> {
+    let id = resolve_id(client, domain)?;
+    let body = client.call_mut("whoisguard.disable", &[("WhoisguardID", id.as_str())])?;
+    let resp: DisableResponse = xml::parse(&body)?;
+    Ok(ToggleResult {
+        domain: resp.result.domain_name,
+        privacy_id: id,
+        enabled: false,
+        is_success: resp.result.is_success,
+    })
+}
+
+pub fn render_toggle(result: &ToggleResult) {
+    println!(
+        "{}: privacy {} ({})",
+        result.domain,
+        if result.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if result.is_success {
+            "success"
+        } else {
+            "NOT successful"
+        },
+    );
 }
 
 pub fn render_table(subs: &[PrivacySubscription]) {

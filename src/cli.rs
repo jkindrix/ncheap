@@ -67,9 +67,11 @@ impl Command {
                 DnsCommand::Get { .. } => "dns.get",
                 DnsCommand::Set { .. } => "dns.set",
             },
-            Command::Privacy {
-                command: PrivacyCommand::List,
-            } => "privacy.list",
+            Command::Privacy { command } => match command {
+                PrivacyCommand::List => "privacy.list",
+                PrivacyCommand::Enable { .. } => "privacy.enable",
+                PrivacyCommand::Disable { .. } => "privacy.disable",
+            },
             Command::Raw { .. } => "raw",
         }
     }
@@ -79,6 +81,23 @@ impl Command {
 pub enum PrivacyCommand {
     /// List all domain privacy subscriptions (auto-paginated)
     List,
+    /// Enable domain privacy (mutating)
+    Enable {
+        domain: String,
+        /// Email address privacy emails are forwarded to (required, never defaulted)
+        #[arg(long)]
+        forward_to: String,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Disable domain privacy (mutating)
+    Disable {
+        domain: String,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

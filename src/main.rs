@@ -236,20 +236,53 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
         },
-        Command::Privacy {
-            command: PrivacyCommand::List,
-        } => {
-            let subs = commands::privacy::list(&client)?;
-            output::success(
-                cli.json,
-                name,
-                &subs,
-                client.profile(),
-                client.calls(),
-                || commands::privacy::render_table(&subs),
-            );
-            Ok(())
-        }
+        Command::Privacy { command } => match command {
+            PrivacyCommand::List => {
+                let subs = commands::privacy::list(&client)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &subs,
+                    client.profile(),
+                    client.calls(),
+                    || commands::privacy::render_table(&subs),
+                );
+                Ok(())
+            }
+            PrivacyCommand::Enable {
+                domain,
+                forward_to,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!("enable privacy for {domain}, forwarding to {forward_to}"),
+                    *yes,
+                )?;
+                let result = commands::privacy::enable(&client, domain, forward_to)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::privacy::render_toggle(&result),
+                );
+                Ok(())
+            }
+            PrivacyCommand::Disable { domain, yes } => {
+                confirm_mutation(&format!("disable privacy for {domain}"), *yes)?;
+                let result = commands::privacy::disable(&client, domain)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::privacy::render_toggle(&result),
+                );
+                Ok(())
+            }
+        },
         Command::Raw { command, params } => {
             let params = commands::raw::parse_params(params)?;
             let body = commands::raw::call(&client, command, &params)?;

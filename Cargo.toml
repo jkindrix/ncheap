@@ -12,6 +12,10 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+# Lock in the post-2018 module layout (src/api.rs, not src/api/mod.rs).
+# tests/common/mod.rs is exempt by design: in tests/ the mod.rs form is the
+# documented idiom for sharing helpers without creating a test binary.
+mod_module_files = "warn"
 
 [profile.release]
 lto = true

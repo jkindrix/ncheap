@@ -183,11 +183,10 @@ impl<T: Transport> Client<T> {
     }
 
     fn throttle(&self) {
-        if let Some(prev) = self.last_call.get() {
-            let elapsed = prev.elapsed();
-            if elapsed < MIN_SPACING {
-                thread::sleep(MIN_SPACING - elapsed);
-            }
+        if let Some(prev) = self.last_call.get()
+            && prev.elapsed() < MIN_SPACING
+        {
+            thread::sleep(MIN_SPACING - prev.elapsed());
         }
         self.last_call.set(Some(Instant::now()));
         self.calls.set(self.calls.get() + 1);

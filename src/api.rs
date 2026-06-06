@@ -49,8 +49,8 @@ pub enum Error {
     Config(#[from] crate::config::ConfigError),
     #[error("transport: {0}")]
     Transport(String),
-    #[error("rate limited by Namecheap (HTTP {0}); retry later")]
-    RateLimited(u16),
+    #[error("rate limited by Namecheap ({0}); retry later")]
+    RateLimited(String),
     #[error("Namecheap API error {code}: {message}")]
     Api { code: String, message: String },
     #[error("unexpected API response: {0}")]
@@ -77,7 +77,9 @@ impl Error {
     pub fn kind(&self) -> &'static str {
         match self {
             Error::Api { .. } => "api",
-            Error::Parse(_) => "api",
+            // Split from "api" in envelope schema 2: a malformed response
+            // is our problem or upstream drift, not a registrar verdict.
+            Error::Parse(_) => "parse",
             Error::Usage(_) => "usage",
             Error::Config(_) | Error::Policy(_) => "config",
             Error::Transport(_) => "transport",
@@ -111,10 +113,12 @@ pub struct HttpTransport {
 impl HttpTransport {
     pub fn new() -> Self {
         // https_only + no redirects: a credential-bearing request must never
-        // be re-routed or downgraded by a server-side redirect.
+        // be re-routed or downgraded by a server-side redirect. Debug builds
+        // relax https_only so the NCHEAP_ENDPOINT test override can point at
+        // a localhost mock; release builds always enforce it.
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
-            .https_only(true)
+            .https_only(cfg!(not(debug_assertions)))
             .max_redirects(0)
             .build();
         Self {
@@ -260,7 +264,7 @@ impl<T: Transport> Client<T> {
         }
         match attempt {
             Ok(body) => Ok(body),
-            Err(TransportFailure::Status(429)) => Err(Error::RateLimited(429)),
+            Err(TransportFailure::Status(429)) => Err(Error::RateLimited("HTTP 429".into())),
             Err(TransportFailure::Status(code)) => {
                 Err(Error::Transport(format!("HTTP status {code}")))
             }

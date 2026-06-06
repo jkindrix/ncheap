@@ -943,3 +943,23 @@ fn register_is_gated_on_production_without_opt_in() {
         "reads allowed, the create itself refused before transport"
     );
 }
+
+#[test]
+fn deeply_nested_xml_fails_or_parses_without_crashing() {
+    // Bounded by ureq's 10MB body cap in production; this pins that a deep
+    // document within that budget errors cleanly instead of blowing the
+    // stack during the IgnoredAny envelope pass.
+    let depth = 50_000;
+    let mut inner = String::with_capacity(depth * 8);
+    for _ in 0..depth {
+        inner.push_str("<a>");
+    }
+    for _ in 0..depth {
+        inner.push_str("</a>");
+    }
+    let transport = FakeTransport::new(vec![envelope("domains.getList", &inner)]);
+    let client = test_client(transport);
+
+    // Any Result is acceptable; the assertion is "no crash".
+    let _ = domains::list(&client);
+}

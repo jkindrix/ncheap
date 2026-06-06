@@ -15,7 +15,8 @@ fn ncheap(temp_config: &std::path::Path) -> Command {
         .env_remove("NCHEAP_USERNAME")
         .env_remove("NCHEAP_CLIENT_IP")
         .env_remove("NCHEAP_SANDBOX")
-        .env_remove("NCHEAP_PROFILE");
+        .env_remove("NCHEAP_PROFILE")
+        .env_remove("NCHEAP_ENDPOINT");
     cmd
 }
 
@@ -210,4 +211,95 @@ fn dns_set_against_production_is_refused_even_with_yes() {
             .unwrap()
             .contains("allow_production_mutations")
     );
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The one test that proves the differentiating contract end-to-end: a
+/// successful --json envelope, exit 0, and POST-with-no-query-credentials
+/// through the REAL binary. Uses the debug-build-only NCHEAP_ENDPOINT
+/// override against a localhost mock; release builds compile the override
+/// out and can only reach the two Namecheap hosts.
+#[test]
+fn success_envelope_through_real_binary() {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("accept");
+        let mut req = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = sock.read(&mut buf).expect("read");
+            if n == 0 {
+                break;
+            }
+            req.extend_from_slice(&buf[..n]);
+            if let Some(pos) = find_subsequence(&req, b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&req[..pos]).to_ascii_lowercase();
+                let content_length: usize = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if req.len() >= pos + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        let body = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ApiResponse xmlns="http://api.namecheap.com/xml.response" Status="OK">
+  <Errors />
+  <RequestedCommand>namecheap.domains.check</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.check">
+    <DomainCheckResult Domain="zq9probe.com" Available="true" ErrorNo="0" Description="" IsPremiumName="false" PremiumRegistrationPrice="0" PremiumRenewalPrice="0" PremiumRestorePrice="0" PremiumTransferPrice="0" IcannFee="0" EapFee="0"/>
+  </CommandResponse>
+  <Server>MOCK</Server>
+</ApiResponse>"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        sock.write_all(resp.as_bytes()).expect("write");
+        String::from_utf8_lossy(&req).into_owned()
+    });
+
+    let dir = temp_dir("e2e-success");
+    let mut cmd = ncheap(&dir);
+    fake_creds(&mut cmd);
+    cmd.env("NCHEAP_ENDPOINT", format!("http://{addr}/xml.response"));
+    let output = cmd
+        .args(["domains", "check", "zq9probe.com", "--json"])
+        .output()
+        .expect("run");
+    let request = server.join().expect("server thread");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON envelope");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["schema"], 2);
+    assert_eq!(v["command"], "domains.check");
+    assert_eq!(v["data"][0]["domain"], "zq9probe.com");
+    assert_eq!(v["data"][0]["available"], true);
+    assert_eq!(v["meta"]["api_calls"], 1);
+    assert_eq!(v["meta"]["version"], env!("CARGO_PKG_VERSION"));
+
+    let request_line = request.lines().next().expect("request line");
+    assert!(
+        request_line.starts_with("POST "),
+        "must POST: {request_line}"
+    );
+    assert!(
+        !request_line.contains("ApiKey"),
+        "credentials must not travel in the URL: {request_line}"
+    );
+    assert!(request.contains("ApiKey=k"), "key travels in the form body");
 }

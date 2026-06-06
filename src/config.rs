@@ -76,10 +76,18 @@ pub struct Profile {
     /// Mutating API calls against production are refused unless this is
     /// explicitly set (sandbox profiles may always mutate).
     pub allow_production_mutations: bool,
+    /// Debug builds only: NCHEAP_ENDPOINT redirects the API endpoint so an
+    /// E2E test can prove the success envelope through the real binary.
+    /// Compiled out of release builds — the two Namecheap hosts are the
+    /// only endpoints a release binary can reach.
+    pub endpoint_override: Option<String>,
 }
 
 impl Profile {
-    pub fn endpoint(&self) -> &'static str {
+    pub fn endpoint(&self) -> &str {
+        if let Some(endpoint) = &self.endpoint_override {
+            return endpoint;
+        }
         if self.sandbox {
             "https://api.sandbox.namecheap.com/xml.response"
         } else {
@@ -188,6 +196,11 @@ pub fn resolve(
         )));
     }
 
+    #[cfg(debug_assertions)]
+    let endpoint_override = env("NCHEAP_ENDPOINT");
+    #[cfg(not(debug_assertions))]
+    let endpoint_override = None;
+
     let api_user = api_user.expect("checked above");
     Ok(Profile {
         username: username.unwrap_or_else(|| api_user.clone()),
@@ -197,6 +210,7 @@ pub fn resolve(
         client_ip: client_ip.expect("checked above"),
         sandbox,
         allow_production_mutations,
+        endpoint_override,
     })
 }
 

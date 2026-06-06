@@ -33,17 +33,28 @@ fn main() -> ExitCode {
             let is_help = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
             if !is_help && std::env::args().any(|a| a == "--json") {
                 let err = ncheap::api::Error::Usage(e.to_string().trim().to_owned());
-                output::failure(true, "cli", &err);
+                output::failure(true, "cli", &err, None);
                 return ExitCode::from(2);
             }
             let _ = e.print();
             return ExitCode::from(if is_help { 0 } else { 2 });
         }
     };
-    match run(&cli) {
+    let name = cli.command.name();
+    let profile = match config::load(cli.profile.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            let err = ncheap::api::Error::from(e);
+            output::failure(cli.json, name, &err, None);
+            return ExitCode::from(err.exit_code());
+        }
+    };
+    let client = Client::new(HttpTransport::new(), profile);
+    match run(&cli, &client) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            output::failure(cli.json, cli.command.name(), &e);
+            // meta carries which profile/sandbox the failed call targeted
+            output::failure(cli.json, name, &e, Some((client.profile(), client.calls())));
             ExitCode::from(e.exit_code())
         }
     }
@@ -70,14 +81,12 @@ fn confirm_mutation(description: &str, yes: bool) -> Result<(), ncheap::api::Err
     Ok(())
 }
 
-fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
+fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Error> {
     let name = cli.command.name();
-    let profile = config::load(cli.profile.as_deref())?;
-    let client = Client::new(HttpTransport::new(), profile);
     match &cli.command {
         Command::Domains { command } => match command {
             DomainsCommand::List => {
-                let domains = commands::domains::list(&client)?;
+                let domains = commands::domains::list(client)?;
                 output::success(
                     cli.json,
                     name,
@@ -89,7 +98,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
             DomainsCommand::Check { domains } => {
-                let results = commands::domains::check(&client, domains)?;
+                let results = commands::domains::check(client, domains)?;
                 output::success(
                     cli.json,
                     name,
@@ -101,7 +110,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
             DomainsCommand::Lock { domain } => {
-                let status = commands::domains::lock_status(&client, domain)?;
+                let status = commands::domains::lock_status(client, domain)?;
                 output::success(
                     cli.json,
                     name,
@@ -113,7 +122,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
             DomainsCommand::Info { domain } => {
-                let info = commands::domains::info(&client, domain)?;
+                let info = commands::domains::info(client, domain)?;
                 output::success(
                     cli.json,
                     name,
@@ -125,7 +134,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
             DomainsCommand::Contacts { domain, full } => {
-                let contacts = commands::domains::contacts(&client, domain)?;
+                let contacts = commands::domains::contacts(client, domain)?;
                 let human = || commands::domains::render_contacts(&contacts, *full);
                 if *full {
                     output::success(
@@ -163,13 +172,8 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     ),
                     *yes,
                 )?;
-                let result = commands::domains::register(
-                    &client,
-                    domain,
-                    *years,
-                    *max_price,
-                    contacts_from,
-                )?;
+                let result =
+                    commands::domains::register(client, domain, *years, *max_price, contacts_from)?;
                 output::success(
                     cli.json,
                     name,
@@ -190,7 +194,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     &format!("renew {domain} for {years} year(s) at up to {max_price:.2}"),
                     *yes,
                 )?;
-                let result = commands::domains::renew(&client, domain, *years, *max_price)?;
+                let result = commands::domains::renew(client, domain, *years, *max_price)?;
                 output::success(
                     cli.json,
                     name,
@@ -204,7 +208,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
         },
         Command::Account { command } => match command {
             AccountCommand::Balances { full } => {
-                let balances = commands::account::balances(&client)?;
+                let balances = commands::account::balances(client)?;
                 let human = || commands::account::render(&balances, *full);
                 if *full {
                     output::success(
@@ -242,7 +246,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 };
                 let cache_dir = dirs::cache_dir().map(|d| d.join("ncheap"));
                 let (rows, _cached) =
-                    commands::account::pricing(&client, &query, cache_dir.as_deref())?;
+                    commands::account::pricing(client, &query, cache_dir.as_deref())?;
                 output::success(
                     cli.json,
                     name,
@@ -256,7 +260,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
         },
         Command::Dns { command } => match command {
             DnsCommand::Get { domain } => {
-                let dns = commands::dns::get(&client, domain)?;
+                let dns = commands::dns::get(client, domain)?;
                 output::success(
                     cli.json,
                     name,
@@ -276,7 +280,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     &format!("set nameservers of {domain} to {}", nameservers.join(", ")),
                     *yes,
                 )?;
-                let result = commands::dns::set(&client, domain, nameservers)?;
+                let result = commands::dns::set(client, domain, nameservers)?;
                 output::success(
                     cli.json,
                     name,
@@ -290,7 +294,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
         },
         Command::Privacy { command } => match command {
             PrivacyCommand::List => {
-                let subs = commands::privacy::list(&client)?;
+                let subs = commands::privacy::list(client)?;
                 output::success(
                     cli.json,
                     name,
@@ -310,7 +314,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     &format!("enable privacy for {domain}, forwarding to {forward_to}"),
                     *yes,
                 )?;
-                let result = commands::privacy::enable(&client, domain, forward_to)?;
+                let result = commands::privacy::enable(client, domain, forward_to)?;
                 output::success(
                     cli.json,
                     name,
@@ -323,7 +327,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
             }
             PrivacyCommand::Disable { domain, yes } => {
                 confirm_mutation(&format!("disable privacy for {domain}"), *yes)?;
-                let result = commands::privacy::disable(&client, domain)?;
+                let result = commands::privacy::disable(client, domain)?;
                 output::success(
                     cli.json,
                     name,
@@ -337,7 +341,7 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
         },
         Command::Raw { command, params } => {
             let params = commands::raw::parse_params(params)?;
-            let body = commands::raw::call(&client, command, &params)?;
+            let body = commands::raw::call(client, command, &params)?;
             output::success(
                 cli.json,
                 name,

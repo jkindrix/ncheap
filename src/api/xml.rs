@@ -58,6 +58,12 @@ pub fn parse<T: DeserializeOwned>(body: &str) -> Result<T, Error> {
                  config value, your current outbound IPv4, and the Namecheap whitelist",
             );
         }
+        // The API rate-limits inside HTTP 200 (third-party-observed error
+        // 500000, not in primary docs); map it to the rate_limit kind so
+        // agents get a back-off signal instead of an ordinary API error.
+        if code == "500000" {
+            return Err(Error::RateLimited(format!("API error 500000: {message}")));
+        }
         Err(Error::Api { code, message })
     }
 }

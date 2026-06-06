@@ -83,32 +83,37 @@ Every command with `--json` emits one envelope on stdout:
 ```json
 {
   "ok": true,
+  "schema": 2,
   "command": "domains.list",
   "data": [ ... ],
   "error": null,
-  "meta": { "profile": "production", "sandbox": false, "api_calls": 1 }
+  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.2.0" }
 }
 ```
 
-On failure `ok` is `false` and `error` carries `kind`
-(`config|transport|auth|api|rate_limit`), `code` (Namecheap error number, if
-any), and `message`.
+`schema` identifies the envelope revision and `meta.version` the producing
+binary. On failure `ok` is `false` and `error` carries `kind`
+(`usage|config|transport|api|parse|rate_limit`), `code` (Namecheap error
+number, if any), and `message`; `meta` is populated whenever a profile had
+resolved before the failure, so failures are attributable to a
+profile/sandbox, and is `null` only for pre-configuration errors.
 
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | Success (per-item results such as an unavailable domain are data, not errors) |
-| 1 | Namecheap API returned an error response |
+| 1 | Namecheap API returned an error response, or the response did not parse (`error.kind` distinguishes `api` from `parse`) |
 | 2 | Usage error (bad arguments) |
-| 3 | Configuration / credential error |
+| 3 | Configuration / credential / policy error |
 | 4 | Transport / network error |
-| 5 | Rate-limited after backoff (defensive: Namecheap documents no rate-limit response shape; a real limit breach may instead surface as an API error, exit 1) |
+| 5 | Rate-limited: HTTP 429 after backoff, or the API's in-band throttle error 500000 (the latter mapping is best-effort — the error code is observed behavior, not documented) |
 
 #### Envelope compatibility
 
-The envelope's five top-level keys (`ok`/`command`/`data`/`error`/`meta`),
-the `error.kind` values, and the exit-code meanings are stable. New fields
+The envelope's top-level keys (`ok`/`schema`/`command`/`data`/`error`/`meta`),
+the `error.kind` values, and the exit-code meanings are stable; `schema`
+increments whenever any of them change. New fields
 or new `kind` values may be added in minor versions (additive); removing or
 renaming any of them is a breaking change and bumps the major version.
 Per-command `data` shapes follow the same rule. Note: if stdout closes
@@ -126,9 +131,27 @@ tag. CI builds the binaries, checksums, and installer.
 
 ## Safety model
 
+**Blast radius, stated plainly:** the Namecheap API key is account-wide —
+the API offers no read-only or per-domain sub-keys. Every gate ncheap
+enforces (read-only allowlist, production-mutation gate, price guards,
+`--yes`) is client-side: they reduce the probability of an *accident* by a
+well-behaved caller, they do not constrain a compromised or maliciously
+instructed agent holding an armed profile. Treat any host running ncheap
+with `allow_production_mutations = true` as holding full registrar
+authority over the account. Namecheap's Universal ToS also reserves
+discretionary suspension for high-volume or abusive automated use —
+sustained agentic operation is at the account owner's risk.
+
 - The API key is never written to logs, error messages, or request traces.
   Requests are sent as POST with a form body, so the key never appears in a
-  URL; the HTTP agent is HTTPS-only and follows no redirects.
+  URL; the HTTP agent is HTTPS-only and follows no redirects. Note that a
+  key supplied via `NCHEAP_API_KEY` is visible in `/proc/<pid>/environ` to
+  same-user processes and may land in shell history; the 0600 config file
+  is the preferred channel on shared or backed-up machines.
+- An interrupted mutation (killed process, network drop after send) has an
+  unknown outcome — the charge or change may have committed server-side.
+  Never blind-retry an interrupted `register`/`renew`/`dns set`; reconcile
+  first via `domains list`/`domains info`/`account balances`.
 - Purchasing commands (`domains register`, `domains renew`) additionally
   require `--max-price` and refuse pre-flight if the **live** listed price
   exceeds it — the pricing cache is never consulted for purchase decisions.

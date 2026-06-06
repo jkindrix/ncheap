@@ -145,7 +145,7 @@ pub enum DomainsCommand {
         /// Registration period in years
         #[arg(long, default_value_t = 1)]
         years: u8,
-        /// Refuse if the live listed price exceeds this amount (required)
+        /// Ceiling on the live LISTED price (the actual charge may add ICANN fees)
         #[arg(long)]
         max_price: f64,
         /// Owned domain whose contacts are copied for the registration
@@ -161,7 +161,7 @@ pub enum DomainsCommand {
         /// Renewal period in years
         #[arg(long, default_value_t = 1)]
         years: u8,
-        /// Refuse if the live listed price exceeds this amount (required)
+        /// Ceiling on the live LISTED price (the actual charge may add ICANN fees)
         #[arg(long)]
         max_price: f64,
         /// Confirm the mutation (required for non-interactive use)

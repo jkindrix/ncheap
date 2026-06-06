@@ -1,48 +1,8 @@
-use std::cell::RefCell;
+mod common;
 
-use ncheap::api::{Client, Transport, TransportFailure};
+use common::{FakeTransport, param, test_profile};
+use ncheap::api::Client;
 use ncheap::commands::domains;
-use ncheap::config::{Profile, Secret};
-
-struct FakeTransport {
-    responses: RefCell<Vec<String>>,
-    requests: RefCell<Vec<Vec<(String, String)>>>,
-}
-
-impl FakeTransport {
-    fn new(responses: Vec<String>) -> Self {
-        Self {
-            responses: RefCell::new(responses),
-            requests: RefCell::new(Vec::new()),
-        }
-    }
-}
-
-impl Transport for FakeTransport {
-    fn send(
-        &self,
-        _endpoint: &str,
-        params: &[(String, String)],
-    ) -> Result<String, TransportFailure> {
-        self.requests.borrow_mut().push(params.to_vec());
-        let mut responses = self.responses.borrow_mut();
-        if responses.is_empty() {
-            return Err(TransportFailure::Other("no more fixture responses".into()));
-        }
-        Ok(responses.remove(0))
-    }
-}
-
-fn test_profile() -> Profile {
-    Profile {
-        name: "test".into(),
-        api_user: "testuser".into(),
-        api_key: Secret::new("testkey".into()),
-        username: "testuser".into(),
-        client_ip: "192.0.2.1".into(),
-        sandbox: true,
-    }
-}
 
 fn page_xml(names: &[String], total: usize, page: usize) -> String {
     let domains: String = names
@@ -86,13 +46,6 @@ fn error_xml(number: &str, message: &str) -> String {
   <Server>TEST</Server>
 </ApiResponse>"#
     )
-}
-
-fn param<'a>(request: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    request
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
 }
 
 /// The core fixture: 24 domains across two pages, exercising the >20-item

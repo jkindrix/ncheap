@@ -22,10 +22,33 @@ pub enum Command {
         #[command(subcommand)]
         command: DomainsCommand,
     },
+    /// Account operations
+    Account {
+        #[command(subcommand)]
+        command: AccountCommand,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum DomainsCommand {
     /// List all domains in the account (auto-paginated)
     List,
+    /// Check availability of one or more domains
+    Check {
+        /// Domains to check (the API caps one call at 50)
+        #[arg(required = true)]
+        domains: Vec<String>,
+    },
+    /// Show the registrar lock status of a domain
+    Lock { domain: String },
+}
+
+#[derive(Subcommand)]
+pub enum AccountCommand {
+    /// Show account balance summary (amounts redacted unless --full)
+    Balances {
+        /// Show exact balance amounts
+        #[arg(long)]
+        full: bool,
+    },
 }

@@ -2,7 +2,7 @@ mod common;
 
 use common::{FakeTransport, param, test_profile};
 use ncheap::api::Client;
-use ncheap::commands::{account, dns, domains, privacy};
+use ncheap::commands::{account, dns, domains, privacy, raw};
 
 fn envelope(command: &str, inner: &str) -> String {
     format!(
@@ -400,4 +400,82 @@ fn pricing_second_call_hits_cache_without_api_call() {
     assert_eq!(rows2.len(), rows.len());
 
     let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn raw_calls_allowlisted_command_and_returns_xml() {
+    let inner = r#"<Tlds><Tld Name="com" /></Tlds>"#;
+    let transport = FakeTransport::new(vec![envelope("domains.gettldlist", inner)]);
+    let client = Client::new(transport, test_profile());
+
+    let body = raw::call(&client, "namecheap.Domains.getTldList", &[]).expect("raw should succeed");
+
+    assert!(body.contains("<Tlds>"), "raw XML body is returned verbatim");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(
+        param(&requests[0], "Command"),
+        Some("namecheap.domains.gettldlist"),
+        "prefix stripped, case-folded, re-prefixed"
+    );
+}
+
+#[test]
+fn raw_forwards_params() {
+    let inner = r#"<DomainGetRegistrarLockResult Domain="d.example" RegistrarLockStatus="True" />"#;
+    let transport = FakeTransport::new(vec![envelope("domains.getRegistrarLock", inner)]);
+    let client = Client::new(transport, test_profile());
+    let params = raw::parse_params(&["DomainName=d.example".to_owned()]).expect("parse");
+
+    raw::call(&client, "domains.getRegistrarLock", &params).expect("raw should succeed");
+
+    let requests = client.transport().requests.borrow();
+    assert_eq!(param(&requests[0], "DomainName"), Some("d.example"));
+}
+
+#[test]
+fn raw_rejects_non_allowlisted_command_without_calling() {
+    let transport = FakeTransport::new(vec![]);
+    let client = Client::new(transport, test_profile());
+
+    let err = raw::call(&client, "domains.dns.setCustom", &[]).expect_err("must be rejected");
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("read-only allowlist"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        0,
+        "no API call may be made for a rejected command"
+    );
+}
+
+#[test]
+fn raw_rejects_reserved_params() {
+    for p in [
+        "ApiKey=x",
+        "Command=namecheap.domains.dns.setCustom",
+        "clientip=1.2.3.4",
+    ] {
+        let err = raw::parse_params(&[p.to_owned()]).expect_err("must be rejected");
+        assert_eq!(err.exit_code(), 2, "{p} must be a usage error");
+        assert!(err.to_string().contains("reserved"));
+    }
+    let err = raw::parse_params(&["NoEqualsSign".to_owned()]).expect_err("must be rejected");
+    assert!(err.to_string().contains("KEY=VALUE"));
+}
+
+#[test]
+fn raw_maps_api_error_envelope_to_error() {
+    let body = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ApiResponse xmlns="http://api.namecheap.com/xml.response" Status="ERROR">
+  <Errors><Error Number="2030280">TLD is not supported</Error></Errors>
+  <RequestedCommand>namecheap.domains.gettldlist</RequestedCommand>
+  <Server>TEST</Server>
+</ApiResponse>"#;
+    let transport = FakeTransport::new(vec![body.to_owned()]);
+    let client = Client::new(transport, test_profile());
+
+    let err = raw::call(&client, "domains.getTldList", &[]).expect_err("must surface API error");
+
+    assert_eq!(err.exit_code(), 1);
+    assert_eq!(err.code(), Some("2030280"));
 }

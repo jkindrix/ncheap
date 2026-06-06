@@ -54,7 +54,13 @@ ncheap dns get example.com             # nameserver mode + host records
 ncheap privacy list                    # domain privacy subscriptions
 ncheap account balances                # amounts redacted unless --full
 ncheap account pricing --action REGISTER --product com   # cached 24h
+ncheap raw domains.getTldList          # direct API call, raw XML out
+ncheap raw domains.getInfo --param DomainName=example.com
 ```
+
+`raw` only calls methods on a read-only allowlist (the wrapped Phase 1
+methods plus `domains.getTldList`); mutating methods are refused, and
+authentication parameters cannot be supplied via `--param`.
 
 Any command takes `--json` for the machine-readable envelope. Domains for
 `dns` commands may be IDN (normalized to punycode) and are split SLD/TLD via

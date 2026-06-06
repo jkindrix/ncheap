@@ -37,6 +37,14 @@ pub enum Command {
         #[command(subcommand)]
         command: PrivacyCommand,
     },
+    /// Call an allowlisted read-only API method directly, emitting raw XML
+    Raw {
+        /// API command, e.g. domains.getTldList ("namecheap." prefix optional)
+        command: String,
+        /// Method parameter, repeatable: --param Key=Value
+        #[arg(long = "param", value_name = "KEY=VALUE")]
+        params: Vec<String>,
+    },
 }
 
 impl Command {
@@ -61,6 +69,7 @@ impl Command {
             Command::Privacy {
                 command: PrivacyCommand::List,
             } => "privacy.list",
+            Command::Raw { .. } => "raw",
         }
     }
 }

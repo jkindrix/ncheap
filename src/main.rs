@@ -178,5 +178,18 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
             );
             Ok(())
         }
+        Command::Raw { command, params } => {
+            let params = commands::raw::parse_params(params)?;
+            let body = commands::raw::call(&client, command, &params)?;
+            output::success(
+                cli.json,
+                name,
+                &body,
+                client.profile(),
+                client.calls(),
+                || println!("{body}"),
+            );
+            Ok(())
+        }
     }
 }

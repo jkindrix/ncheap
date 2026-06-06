@@ -27,6 +27,14 @@ pub fn split_sld_tld(input: &str) -> Result<(String, String), Error> {
     Ok((sld.to_owned(), suffix.to_owned()))
 }
 
+/// Normalize a domain argument for DomainName/DomainList params: same
+/// IDN-to-punycode and PSL validation as the SLD/TLD path, joined back up,
+/// so every command treats domain input identically.
+pub fn normalize(input: &str) -> Result<String, Error> {
+    let (sld, tld) = split_sld_tld(input)?;
+    Ok(format!("{sld}.{tld}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

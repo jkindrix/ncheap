@@ -1,7 +1,6 @@
 mod common;
 
-use common::{FakeTransport, param, test_profile};
-use ncheap::api::Client;
+use common::{FakeTransport, param, test_client};
 use ncheap::commands::{account, dns, domains, privacy, raw};
 
 fn envelope(command: &str, inner: &str) -> String {
@@ -25,7 +24,7 @@ fn check_parses_regular_and_premium_results() {
 <DomainCheckResult Domain="taken.example" Available="false" ErrorNo="0" Description="" IsPremiumName="false" PremiumRegistrationPrice="0" PremiumRenewalPrice="0" PremiumRestorePrice="0" PremiumTransferPrice="0" IcannFee="0" EapFee="0"/>
 <DomainCheckResult Domain="fancy.example" Available="true" ErrorNo="0" Description="" IsPremiumName="true" PremiumRegistrationPrice="13000.0000" PremiumRenewalPrice="13000.0000" PremiumRestorePrice="65.0000" PremiumTransferPrice="13000.0000" IcannFee="0.0000" EapFee="0.0000"/>"#;
     let transport = FakeTransport::new(vec![envelope("domains.check", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let results = domains::check(
         &client,
@@ -58,7 +57,7 @@ fn lock_status_parses_capitalized_boolean() {
     let inner =
         r#"<DomainGetRegistrarLockResult Domain="domain1.example" RegistrarLockStatus="True" />"#;
     let transport = FakeTransport::new(vec![envelope("domains.getRegistrarLock", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let status = domains::lock_status(&client, "domain1.example").expect("lock should succeed");
 
@@ -76,7 +75,7 @@ fn lock_status_parses_capitalized_boolean() {
 fn balances_redacted_view_hides_amounts() {
     let inner = r#"<UserGetBalancesResult Currency="USD" AvailableBalance="4932.96" AccountBalance="4932.96" EarnedAmount="381.70" WithdrawableAmount="1243.36" FundsRequiredForAutoRenew="120.00" />"#;
     let transport = FakeTransport::new(vec![envelope("users.getBalances", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let balances = account::balances(&client).expect("balances should succeed");
     assert_eq!(balances.available_balance, "4932.96");
@@ -99,7 +98,7 @@ fn balances_redaction_survives_unparseable_amounts() {
     // response must degrade to "unknown", not a wrong answer.
     let inner = r#"<UserGetBalancesResult Currency="EUR" AvailableBalance="4.932,96" AccountBalance="4.932,96" EarnedAmount="0,00" WithdrawableAmount="0,00" FundsRequiredForAutoRenew="120,00" />"#;
     let transport = FakeTransport::new(vec![envelope("users.getBalances", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let balances = account::balances(&client).expect("balances should succeed");
     let redacted = account::redacted_view(&balances);
@@ -126,7 +125,7 @@ fn dns_get_fetches_hosts_when_namecheap_is_authoritative() {
         envelope("domains.dns.getList", list_inner),
         envelope("domains.dns.getHosts", hosts_inner),
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let info = dns::get(&client, "domain.com").expect("dns get should succeed");
 
@@ -155,7 +154,7 @@ fn dns_get_skips_hosts_for_external_dns() {
   <Nameserver>ns1.external.example</Nameserver>
 </DomainDNSGetListResult>"#;
     let transport = FakeTransport::new(vec![envelope("domains.dns.getList", list_inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let info = dns::get(&client, "domain.co.uk").expect("dns get should succeed");
 
@@ -190,7 +189,7 @@ fn info_parses_nested_structure() {
   <Modificationrights All="true" />
 </DomainGetInfoResult>"#;
     let transport = FakeTransport::new(vec![envelope("domains.getinfo", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let info = domains::info(&client, "domain1.com").expect("info should succeed");
 
@@ -240,7 +239,7 @@ fn contacts_redacted_view_hides_pii_and_reports_consistency() {
 </DomainContactsResult>"#
     );
     let transport = FakeTransport::new(vec![envelope("domains.getContacts", &inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let contacts = domains::contacts(&client, "domain1.com").expect("contacts should succeed");
     assert_eq!(contacts.registrant.first_name, "John");
@@ -282,7 +281,7 @@ fn dns_get_parses_lowercase_host_elements_from_live_api() {
         envelope("domains.dns.getList", list_inner),
         envelope("domains.dns.getHosts", hosts_inner),
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let info = dns::get(&client, "domain.com").expect("dns get should succeed");
     let hosts = info.host_records.expect("hosts present");
@@ -313,7 +312,7 @@ fn privacy_list_paginates_and_parses() {
         envelope("whoisguard.getList", &privacy_page(&first, 124)),
         envelope("whoisguard.getList", &privacy_page(&second, 124)),
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let subs = privacy::list(&client).expect("privacy list should succeed");
 
@@ -351,7 +350,7 @@ fn pricing_inner() -> &'static str {
 #[test]
 fn pricing_flattens_nested_tree_and_sends_filters() {
     let transport = FakeTransport::new(vec![envelope("users.getPricing", pricing_inner())]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
     let query = account::PricingQuery {
         product_type: "DOMAIN".into(),
         category: None,
@@ -379,7 +378,7 @@ fn pricing_second_call_hits_cache_without_api_call() {
     let _ = std::fs::remove_dir_all(&cache_dir);
 
     let transport = FakeTransport::new(vec![envelope("users.getPricing", pricing_inner())]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
     let query = account::PricingQuery {
         product_type: "DOMAIN".into(),
         category: None,
@@ -406,7 +405,7 @@ fn pricing_second_call_hits_cache_without_api_call() {
 fn raw_calls_allowlisted_command_and_returns_xml() {
     let inner = r#"<Tlds><Tld Name="com" /></Tlds>"#;
     let transport = FakeTransport::new(vec![envelope("domains.gettldlist", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let body = raw::call(&client, "namecheap.Domains.getTldList", &[]).expect("raw should succeed");
 
@@ -423,7 +422,7 @@ fn raw_calls_allowlisted_command_and_returns_xml() {
 fn raw_forwards_params() {
     let inner = r#"<DomainGetRegistrarLockResult Domain="d.example" RegistrarLockStatus="True" />"#;
     let transport = FakeTransport::new(vec![envelope("domains.getRegistrarLock", inner)]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
     let params = raw::parse_params(&["DomainName=d.example".to_owned()]).expect("parse");
 
     raw::call(&client, "domains.getRegistrarLock", &params).expect("raw should succeed");
@@ -435,7 +434,7 @@ fn raw_forwards_params() {
 #[test]
 fn raw_rejects_non_allowlisted_command_without_calling() {
     let transport = FakeTransport::new(vec![]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let err = raw::call(&client, "domains.dns.setCustom", &[]).expect_err("must be rejected");
 
@@ -472,10 +471,47 @@ fn raw_maps_api_error_envelope_to_error() {
   <Server>TEST</Server>
 </ApiResponse>"#;
     let transport = FakeTransport::new(vec![body.to_owned()]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let err = raw::call(&client, "domains.getTldList", &[]).expect_err("must surface API error");
 
     assert_eq!(err.exit_code(), 1);
     assert_eq!(err.code(), Some("2030280"));
+}
+
+#[test]
+fn transient_500_is_retried_once_and_counts_one_logical_call() {
+    use ncheap::api::TransportFailure;
+    let inner = r#"<UserGetBalancesResult Currency="USD" AvailableBalance="1.00" AccountBalance="1.00" EarnedAmount="0.00" WithdrawableAmount="0.00" FundsRequiredForAutoRenew="0.00" />"#;
+    let transport = FakeTransport::with_results(vec![
+        Err(TransportFailure::Status(500)),
+        Ok(envelope("users.getBalances", inner)),
+    ]);
+    let client = test_client(transport);
+
+    let balances = account::balances(&client).expect("retry should recover");
+
+    assert_eq!(balances.currency, "USD");
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        2,
+        "two transport attempts"
+    );
+    assert_eq!(client.calls(), 1, "but one logical API call in meta");
+}
+
+#[test]
+fn persistent_429_maps_to_rate_limited_exit_5() {
+    use ncheap::api::TransportFailure;
+    let transport = FakeTransport::with_results(vec![
+        Err(TransportFailure::Status(429)),
+        Err(TransportFailure::Status(429)),
+    ]);
+    let client = test_client(transport);
+
+    let err = account::balances(&client).expect_err("must fail after one retry");
+
+    assert_eq!(err.exit_code(), 5);
+    assert_eq!(err.kind(), "rate_limit");
+    assert_eq!(client.transport().requests.borrow().len(), 2);
 }

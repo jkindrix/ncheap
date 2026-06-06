@@ -8,6 +8,21 @@ use ncheap::commands::account::PricingQuery;
 use ncheap::{commands, config, output};
 
 fn main() -> ExitCode {
+    // println! panics when stdout closes mid-write (`ncheap ... | head`).
+    // A closed pipe is normal termination for a CLI, not a crash: exit 0
+    // quietly instead of exit 101 with panic spew, like cat does.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let broken_pipe = info
+            .payload()
+            .downcast_ref::<String>()
+            .is_some_and(|s| s.contains("Broken pipe"));
+        if broken_pipe {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+
     let cli = Cli::parse();
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,

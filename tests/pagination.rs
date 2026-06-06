@@ -1,7 +1,6 @@
 mod common;
 
-use common::{FakeTransport, param, test_profile};
-use ncheap::api::Client;
+use common::{FakeTransport, param, test_client};
 use ncheap::commands::domains;
 
 fn page_xml(names: &[String], total: usize, page: usize) -> String {
@@ -57,7 +56,7 @@ fn paginates_beyond_default_page_size() {
         page_xml(&names[..20], 24, 1),
         page_xml(&names[20..], 24, 2),
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let domains = domains::list(&client).expect("list should succeed");
 
@@ -75,7 +74,7 @@ fn requests_carry_auth_pagination_and_prefixed_command() {
         page_xml(&names[..20], 24, 1),
         page_xml(&names[20..], 24, 2),
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
     domains::list(&client).expect("list should succeed");
 
     let requests = client.transport().requests.borrow();
@@ -95,7 +94,7 @@ fn requests_carry_auth_pagination_and_prefixed_command() {
 fn ip_rejection_error_is_explained() {
     let transport =
         FakeTransport::new(vec![error_xml("1011150", "Parameter RequestIP is invalid")]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let err = domains::list(&client).expect_err("should fail");
     assert_eq!(err.exit_code(), 1);
@@ -114,7 +113,7 @@ fn stalled_pagination_is_an_error_not_a_hang() {
         page_xml(&names, 24, 1),
         page_xml(&[], 24, 2), // server claims 24 but returns an empty page
     ]);
-    let client = Client::new(transport, test_profile());
+    let client = test_client(transport);
 
     let err = domains::list(&client).expect_err("should fail");
     assert_eq!(err.exit_code(), 1);

@@ -162,12 +162,23 @@ pub struct CheckResult {
 }
 
 /// Check availability. Unavailable domains are data, not errors. The API
-/// caps a single call at 50 domains (error 2011169); not chunked here.
+/// caps a single call at 50 domains; rejected up front as a usage error
+/// rather than surfaced as a server round-trip.
 pub fn check<T: Transport>(
     client: &Client<T>,
     domains: &[String],
 ) -> Result<Vec<CheckResult>, Error> {
-    let list = domains.join(",");
+    if domains.len() > 50 {
+        return Err(Error::Usage(format!(
+            "domains check accepts at most 50 domains per call (got {})",
+            domains.len()
+        )));
+    }
+    let normalized: Vec<String> = domains
+        .iter()
+        .map(|d| crate::domain::normalize(d))
+        .collect::<Result<_, _>>()?;
+    let list = normalized.join(",");
     let body = client.call("domains.check", &[("DomainList", &list)])?;
     let resp: CheckResponse = xml::parse(&body)?;
     Ok(resp.results)
@@ -192,7 +203,8 @@ pub struct LockStatus {
 
 /// Read-only registrar lock status (namecheap.domains.getRegistrarLock).
 pub fn lock_status<T: Transport>(client: &Client<T>, domain: &str) -> Result<LockStatus, Error> {
-    let body = client.call("domains.getRegistrarLock", &[("DomainName", domain)])?;
+    let domain = crate::domain::normalize(domain)?;
+    let body = client.call("domains.getRegistrarLock", &[("DomainName", &domain)])?;
     let resp: LockResponse = xml::parse(&body)?;
     Ok(resp.result)
 }
@@ -285,7 +297,8 @@ pub struct PrivacyInfo {
 }
 
 pub fn info<T: Transport>(client: &Client<T>, domain: &str) -> Result<DomainInfo, Error> {
-    let body = client.call("domains.getInfo", &[("DomainName", domain)])?;
+    let domain = crate::domain::normalize(domain)?;
+    let body = client.call("domains.getInfo", &[("DomainName", &domain)])?;
     let resp: GetInfoResponse = xml::parse(&body)?;
     let r = resp.result;
     Ok(DomainInfo {
@@ -385,7 +398,8 @@ pub struct Contacts {
 }
 
 pub fn contacts<T: Transport>(client: &Client<T>, domain: &str) -> Result<Contacts, Error> {
-    let body = client.call("domains.getContacts", &[("DomainName", domain)])?;
+    let domain = crate::domain::normalize(domain)?;
+    let body = client.call("domains.getContacts", &[("DomainName", &domain)])?;
     let resp: GetContactsResponse = xml::parse(&body)?;
     let r = resp.result;
     Ok(Contacts {

@@ -33,3 +33,6 @@ thiserror = "2.0"
 dirs = "6.0"
 psl = "2.1.212"
 idna = "1.1.0"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"

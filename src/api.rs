@@ -6,8 +6,11 @@ use std::time::{Duration, Instant};
 
 use crate::config::Profile;
 
-/// Minimum spacing between API calls: the key-wide limit is 50/min.
-const MIN_SPACING: Duration = Duration::from_millis(1300);
+/// Minimum spacing between API calls within this process. The documented
+/// key-wide limits are 20/min, 700/hour, 8000/day; 3100ms keeps a single
+/// invocation under the per-minute cap with margin. Concurrent processes do
+/// not coordinate (a cross-process budget is planned, not built).
+const MIN_SPACING: Duration = Duration::from_millis(3100);
 /// Backoff before the single retry on HTTP 429/5xx. The API documents no
 /// rate-limit error shape, so this is conservative, not tuned.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
@@ -75,8 +78,12 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new() -> Self {
+        // https_only + no redirects: a credential-bearing request must never
+        // be re-routed or downgraded by a server-side redirect.
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
+            .https_only(true)
+            .max_redirects(0)
             .build();
         Self {
             agent: config.into(),
@@ -96,11 +103,13 @@ impl Transport for HttpTransport {
         endpoint: &str,
         params: &[(String, String)],
     ) -> Result<String, TransportFailure> {
-        let mut req = self.agent.get(endpoint);
-        for (k, v) in params {
-            req = req.query(k, v);
-        }
-        match req.call() {
+        // POST with a form body keeps the ApiKey out of URLs (query strings
+        // are exposed to proxies and intermediary logging; bodies are not).
+        let form: Vec<(&str, &str)> = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        match self.agent.post(endpoint).send_form(form) {
             Ok(mut resp) => resp
                 .body_mut()
                 .read_to_string()
@@ -116,6 +125,8 @@ pub struct Client<T: Transport> {
     profile: Profile,
     last_call: Cell<Option<Instant>>,
     calls: Cell<u32>,
+    spacing: Duration,
+    retry_backoff: Duration,
 }
 
 impl<T: Transport> Client<T> {
@@ -125,7 +136,16 @@ impl<T: Transport> Client<T> {
             profile,
             last_call: Cell::new(None),
             calls: Cell::new(0),
+            spacing: MIN_SPACING,
+            retry_backoff: RETRY_BACKOFF,
         }
+    }
+
+    /// Override throttle spacing and retry backoff (tests use zero so the
+    /// retry and pagination paths run without real sleeps).
+    pub fn set_timing(&mut self, spacing: Duration, retry_backoff: Duration) {
+        self.spacing = spacing;
+        self.retry_backoff = retry_backoff;
     }
 
     pub fn profile(&self) -> &Profile {
@@ -161,10 +181,12 @@ impl<T: Transport> Client<T> {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
         );
 
+        // Counts logical API commands; a retried attempt is still one call.
+        self.calls.set(self.calls.get() + 1);
         self.throttle();
         let mut attempt = self.transport.send(self.profile.endpoint(), &all);
         if matches!(attempt, Err(TransportFailure::Status(code)) if code == 429 || code >= 500) {
-            thread::sleep(RETRY_BACKOFF);
+            thread::sleep(self.retry_backoff);
             self.throttle();
             attempt = self.transport.send(self.profile.endpoint(), &all);
         }
@@ -184,11 +206,10 @@ impl<T: Transport> Client<T> {
 
     fn throttle(&self) {
         if let Some(prev) = self.last_call.get()
-            && prev.elapsed() < MIN_SPACING
+            && prev.elapsed() < self.spacing
         {
-            thread::sleep(MIN_SPACING - prev.elapsed());
+            thread::sleep(self.spacing - prev.elapsed());
         }
         self.last_call.set(Some(Instant::now()));
-        self.calls.set(self.calls.get() + 1);
     }
 }

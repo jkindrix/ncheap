@@ -102,12 +102,17 @@ any), and `message`.
 ## Safety model
 
 - The API key is never written to logs, error messages, or request traces.
+  Requests are sent as POST with a form body, so the key never appears in a
+  URL; the HTTP agent is HTTPS-only and follows no redirects.
 - Read-only commands are the only ones implemented today. Mutating commands
   (nameservers, privacy toggles, registration/renewal) will ship
   sandbox-gated and disabled against production until explicitly enabled in
   config, with `--yes` required for non-interactive use.
-- Client-side throttling spaces requests under Namecheap's 50/min key-wide
-  rate limit, with backoff on HTTP 429/5xx.
+- Client-side throttling spaces requests ~3s apart **within one invocation**,
+  keeping a single run under Namecheap's documented 20/min key-wide limit
+  (700/hour and 8000/day also apply), with backoff on HTTP 429/5xx.
+  Concurrent ncheap processes do not coordinate: they share one key budget,
+  so avoid running many instances in parallel against the same key.
 
 ## License
 

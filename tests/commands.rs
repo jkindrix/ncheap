@@ -594,3 +594,37 @@ fn call_mut_dispatches_on_production_with_explicit_opt_in() {
         Some("namecheap.domains.dns.sethosts")
     );
 }
+
+#[test]
+fn pricing_cache_is_keyed_by_profile() {
+    let cache_dir = std::env::temp_dir().join(format!("ncheap-profkey-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let query = account::PricingQuery {
+        product_type: "DOMAIN".into(),
+        category: None,
+        action: None,
+        product: None,
+    };
+
+    let client = test_client(FakeTransport::new(vec![envelope(
+        "users.getPricing",
+        pricing_inner(),
+    )]));
+    let (_, cached) = account::pricing(&client, &query, Some(&cache_dir)).expect("first");
+    assert!(!cached);
+
+    // Same query, different profile: must NOT be served profile A's prices.
+    let mut other_profile = test_profile();
+    other_profile.name = "other".into();
+    other_profile.sandbox = false;
+    let mut other_client = Client::new(
+        FakeTransport::new(vec![envelope("users.getPricing", pricing_inner())]),
+        other_profile,
+    );
+    other_client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    let (_, cached) = account::pricing(&other_client, &query, Some(&cache_dir)).expect("second");
+    assert!(!cached, "cache must be keyed by profile and sandbox flag");
+    assert_eq!(other_client.calls(), 1, "other profile fetched live");
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}

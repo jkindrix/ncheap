@@ -91,6 +91,14 @@ pub fn list<T: Transport>(client: &Client<T>) -> Result<Vec<Domain>, Error> {
                 resp.paging.total_items
             )));
         }
+        // TotalItems is server-controlled; it must not drive an unbounded
+        // loop. 100 pages × PageSize 100 = 10,000 items, far past any
+        // realistic account.
+        if page >= 100 {
+            return Err(Error::Parse(
+                "pagination overflow: 100 pages fetched without completing the listing".into(),
+            ));
+        }
         page += 1;
     }
 }

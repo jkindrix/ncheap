@@ -43,9 +43,11 @@ pub fn parse<T: DeserializeOwned>(body: &str) -> Result<T, Error> {
             .map(|e| (e.number.clone(), e.message.trim().to_owned()))
             .unwrap_or_else(|| ("unknown".into(), "no error detail in response".into()));
         if code == "1011150" {
+            // Documented as "Parameter RequestIP is invalid"; in practice
+            // this often accompanies IP-whitelist problems.
             message.push_str(
-                " — Namecheap rejected the request IP: check the client_ip config value, \
-                 your current outbound IPv4, and the Namecheap whitelist",
+                " — this often accompanies IP-whitelist problems: check the client_ip \
+                 config value, your current outbound IPv4, and the Namecheap whitelist",
             );
         }
         Err(Error::Api { code, message })

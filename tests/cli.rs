@@ -131,3 +131,31 @@ fn check_over_50_domains_exits_2_before_any_network() {
     assert_eq!(v["error"]["kind"], "usage");
     assert!(v["error"]["message"].as_str().unwrap().contains("50"));
 }
+
+#[test]
+fn clap_error_with_json_flag_emits_failure_envelope() {
+    let dir = temp_dir("clapjson");
+    let output = ncheap(&dir)
+        .args(["--json", "domains", "nosuchsub"])
+        .output()
+        .expect("run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON envelope");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"]["kind"], "usage");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nosuchsub")
+    );
+}
+
+#[test]
+fn help_still_exits_0_with_usage_on_stdout() {
+    let dir = temp_dir("help");
+    let output = ncheap(&dir).arg("--help").output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
+}

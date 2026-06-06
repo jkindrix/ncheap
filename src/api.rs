@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 
 use crate::config::Profile;
 
-/// Minimum spacing between API calls within this process. The documented
-/// key-wide limits are 20/min, 700/hour, 8000/day; 3100ms keeps a single
-/// invocation under the per-minute cap with margin. Concurrent processes do
-/// not coordinate (a cross-process budget is planned, not built).
+/// Minimum spacing between API calls within this process. Namecheap's FAQ
+/// has been observed stating the per-minute key-wide limit as both 20/min
+/// and 50/min (700/hour and 8000/day are consistent across sources); 3100ms
+/// spaces for the conservative reading. Concurrent processes do not
+/// coordinate (a cross-process budget is planned, not built).
 const MIN_SPACING: Duration = Duration::from_millis(3100);
 /// Backoff before the single retry on HTTP 429/5xx. The API documents no
 /// rate-limit error shape, so this is conservative, not tuned.
@@ -141,6 +142,11 @@ impl Transport for HttpTransport {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         match self.agent.post(endpoint).send_form(form) {
+            // With max_redirects(0), ureq hands a 3xx back as Ok; that is a
+            // transport anomaly here, not an API response to parse.
+            Ok(resp) if resp.status().is_redirection() => {
+                Err(TransportFailure::Status(resp.status().as_u16()))
+            }
             Ok(mut resp) => resp
                 .body_mut()
                 .read_to_string()

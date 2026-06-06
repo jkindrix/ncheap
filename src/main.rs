@@ -23,7 +23,23 @@ fn main() -> ExitCode {
         default_hook(info);
     }));
 
-    let cli = Cli::parse();
+    // try_parse rather than parse: "every command with --json emits one
+    // envelope" must hold for malformed invocations too — agents generate
+    // them routinely. clap never parsed, so --json is detected from argv.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            let is_help = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
+            if !is_help && std::env::args().any(|a| a == "--json") {
+                let err = ncheap::api::Error::Usage(e.to_string().trim().to_owned());
+                output::failure(true, "cli", &err);
+                return ExitCode::from(2);
+            }
+            let _ = e.print();
+            return ExitCode::from(if is_help { 0 } else { 2 });
+        }
+    };
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

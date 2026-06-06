@@ -158,9 +158,14 @@ pub struct PricingQuery {
 }
 
 impl PricingQuery {
-    fn cache_file_name(&self) -> String {
+    /// Keyed by profile and sandbox flag as well as the query: YourPrice is
+    /// account-specific and sandbox pricing differs from production, so one
+    /// profile's prices must never be served to another.
+    fn cache_file_name(&self, profile: &crate::config::Profile) -> String {
         let mut key = format!(
-            "pricing-{}-{}-{}-{}",
+            "pricing-{}-{}-{}-{}-{}-{}",
+            profile.name,
+            profile.sandbox,
             self.product_type,
             self.category.as_deref().unwrap_or(""),
             self.action.as_deref().unwrap_or(""),
@@ -183,7 +188,8 @@ pub fn pricing<T: Transport>(
     query: &PricingQuery,
     cache_dir: Option<&Path>,
 ) -> Result<(Vec<PriceRow>, bool), Error> {
-    let cache_path: Option<PathBuf> = cache_dir.map(|d| d.join(query.cache_file_name()));
+    let cache_path: Option<PathBuf> =
+        cache_dir.map(|d| d.join(query.cache_file_name(client.profile())));
     if let Some(path) = &cache_path
         && let Some(rows) = read_cache(path)
     {

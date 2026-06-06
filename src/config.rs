@@ -41,9 +41,7 @@ pub enum ConfigError {
     },
     #[error("profile \"{0}\" not found in config file")]
     UnknownProfile(String),
-    #[error(
-        "missing credentials: {0}; set them in ~/.config/ncheap/config.toml or via NCHEAP_* environment variables"
-    )]
+    #[error("missing credentials: {0}")]
     Missing(String),
     #[error("invalid value for {0} (expected true or false)")]
     Invalid(String),
@@ -154,13 +152,17 @@ pub fn resolve(
         Some(v) => parse_bool(&v).ok_or_else(|| ConfigError::Invalid("NCHEAP_SANDBOX".into()))?,
         None => base.sandbox.unwrap_or(false),
     };
-    let allow_production_mutations = match env("NCHEAP_ALLOW_PRODUCTION_MUTATIONS") {
-        Some(v) => parse_bool(&v)
-            .ok_or_else(|| ConfigError::Invalid("NCHEAP_ALLOW_PRODUCTION_MUTATIONS".into()))?,
-        None => base.allow_production_mutations.unwrap_or(false),
-    };
+    // Deliberately NOT overridable from the environment: env is the most
+    // injection-prone channel an agent has, and this flag arms production
+    // mutations. The 0600-protected config file is the only switch.
+    let allow_production_mutations = base.allow_production_mutations.unwrap_or(false);
     let api_user = env("NCHEAP_API_USER").or(base.api_user);
-    let api_key = env("NCHEAP_API_KEY").map(Secret::new).or(base.api_key);
+    // An empty key is missing, not present: "" would also turn the
+    // key-redaction replace into string mangling.
+    let api_key = env("NCHEAP_API_KEY")
+        .map(Secret::new)
+        .or(base.api_key)
+        .filter(|k| !k.expose().is_empty());
     let client_ip = env("NCHEAP_CLIENT_IP").or(base.client_ip);
     let username = env("NCHEAP_USERNAME").or(base.username);
 
@@ -175,7 +177,15 @@ pub fn resolve(
         missing.push("client_ip (NCHEAP_CLIENT_IP)");
     }
     if !missing.is_empty() {
-        return Err(ConfigError::Missing(missing.join(", ")));
+        // Name the *resolved* config path: on macOS dirs maps to
+        // ~/Library/Application Support, not ~/.config.
+        let path = config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "the ncheap config file".to_owned());
+        return Err(ConfigError::Missing(format!(
+            "{}; set them in {path} or via NCHEAP_* environment variables",
+            missing.join(", ")
+        )));
     }
 
     let api_user = api_user.expect("checked above");
@@ -288,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn allow_production_mutations_resolves_from_file_and_env() {
+    fn allow_production_mutations_is_config_file_only() {
         let mut file = sample_file();
         file.profile
             .get_mut("production")
@@ -300,9 +310,25 @@ mod tests {
         let p = resolve(Some(sample_file()), None, &env_of(&[])).unwrap();
         assert!(!p.allow_production_mutations, "defaults to false");
 
+        // The environment must NOT be able to arm production mutations:
+        // env is the most injection-prone channel an agent has.
         let env = env_of(&[("NCHEAP_ALLOW_PRODUCTION_MUTATIONS", "true")]);
         let p = resolve(Some(sample_file()), None, &env).unwrap();
-        assert!(p.allow_production_mutations, "env overrides");
+        assert!(
+            !p.allow_production_mutations,
+            "env override must be ignored"
+        );
+    }
+
+    #[test]
+    fn empty_api_key_is_missing_not_present() {
+        let env = env_of(&[
+            ("NCHEAP_API_USER", "u"),
+            ("NCHEAP_API_KEY", ""),
+            ("NCHEAP_CLIENT_IP", "192.0.2.20"),
+        ]);
+        let err = resolve(None, None, &env).unwrap_err();
+        assert!(err.to_string().contains("api_key"));
     }
 
     #[test]

@@ -61,6 +61,12 @@ pub fn list<T: Transport>(client: &Client<T>) -> Result<Vec<PrivacySubscription>
                 resp.paging.total_items
             )));
         }
+        // Same bound as domains::list: TotalItems is server-controlled.
+        if page >= 100 {
+            return Err(Error::Parse(
+                "pagination overflow: 100 pages fetched without completing the listing".into(),
+            ));
+        }
         page += 1;
     }
 }

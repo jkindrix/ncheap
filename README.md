@@ -16,8 +16,9 @@ Produces a single binary at `target/release/ncheap`.
 
 ## Configuration
 
-Credentials live in `~/.config/ncheap/config.toml` (must be `chmod 600`;
-ncheap refuses group/other-readable config files):
+Credentials live in `~/.config/ncheap/config.toml` on Linux, or
+`~/Library/Application Support/ncheap/config.toml` on macOS (must be
+`chmod 600`; ncheap refuses group/other-readable config files):
 
 ```toml
 default_profile = "production"
@@ -97,7 +98,18 @@ any), and `message`.
 | 2 | Usage error (bad arguments) |
 | 3 | Configuration / credential error |
 | 4 | Transport / network error |
-| 5 | Rate-limited after backoff |
+| 5 | Rate-limited after backoff (defensive: Namecheap documents no rate-limit response shape; a real limit breach may instead surface as an API error, exit 1) |
+
+#### Envelope compatibility
+
+The envelope's five top-level keys (`ok`/`command`/`data`/`error`/`meta`),
+the `error.kind` values, and the exit-code meanings are stable. New fields
+or new `kind` values may be added in minor versions (additive); removing or
+renaming any of them is a breaking change and bumps the major version.
+Per-command `data` shapes follow the same rule. Note: if stdout closes
+mid-write (e.g. piping to `head`), ncheap exits 0 like standard tools —
+consumers should treat truncated JSON as incomplete output, not as a
+command result.
 
 ## Releasing
 
@@ -117,10 +129,12 @@ tag. CI builds the binaries, checksums, and installer.
   sandbox-gated and disabled against production until explicitly enabled in
   config, with `--yes` required for non-interactive use.
 - Client-side throttling spaces requests ~3s apart **within one invocation**,
-  keeping a single run under Namecheap's documented 20/min key-wide limit
-  (700/hour and 8000/day also apply), with backoff on HTTP 429/5xx.
-  Concurrent ncheap processes do not coordinate: they share one key budget,
-  so avoid running many instances in parallel against the same key.
+  with backoff on HTTP 429/5xx. Namecheap's FAQ has stated the per-minute
+  key-wide limit as both 20/min and 50/min at different times (700/hour and
+  8000/day are consistent across sources); ncheap spaces for the
+  conservative reading. Concurrent ncheap processes do not coordinate: they
+  share one key budget, so avoid running many instances in parallel against
+  the same key.
 
 ## License
 

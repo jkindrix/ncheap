@@ -99,6 +99,14 @@ any), and `message`.
 | 4 | Transport / network error |
 | 5 | Rate-limited after backoff |
 
+## Releasing
+
+Releases are automated by [dist](https://opensource.axo.dev/cargo-dist/):
+bump the version in `Cargo.toml`, update `CHANGELOG.md`, run
+`cargo update -p psl` (the embedded Public Suffix List snapshot is frozen
+into each binary at build time), commit, then tag `vX.Y.Z` and push the
+tag. CI builds the binaries, checksums, and installer.
+
 ## Safety model
 
 - The API key is never written to logs, error messages, or request traces.

@@ -29,13 +29,21 @@ pub struct ApiError {
 
 /// Parse a raw XML body into the command-response payload, mapping the
 /// `ApiResponse Status` envelope to Ok/Err.
+///
+/// Two passes: error responses can carry a junk CommandResponse element
+/// (observed live: `<DomainDNSSetCustomResult Domain="" Updated="" />`
+/// inside Status="ERROR"), so the typed payload parse must not run — and
+/// fail, masking the real API error — before the status check.
 pub fn parse<T: DeserializeOwned>(body: &str) -> Result<T, Error> {
-    let resp: ApiResponse<T> =
+    let envelope: ApiResponse<serde::de::IgnoredAny> =
         quick_xml::de::from_str(body).map_err(|e| Error::Parse(format!("malformed XML: {e}")))?;
-    if resp.status.eq_ignore_ascii_case("ok") {
+    if envelope.status.eq_ignore_ascii_case("ok") {
+        let resp: ApiResponse<T> = quick_xml::de::from_str(body)
+            .map_err(|e| Error::Parse(format!("malformed XML: {e}")))?;
         resp.command_response
             .ok_or_else(|| Error::Parse("Status=OK but no CommandResponse element".into()))
     } else {
+        let resp = envelope;
         let (code, mut message) = resp
             .errors
             .errors

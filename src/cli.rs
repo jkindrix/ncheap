@@ -63,9 +63,10 @@ impl Command {
                 AccountCommand::Balances { .. } => "account.balances",
                 AccountCommand::Pricing { .. } => "account.pricing",
             },
-            Command::Dns {
-                command: DnsCommand::Get { .. },
-            } => "dns.get",
+            Command::Dns { command } => match command {
+                DnsCommand::Get { .. } => "dns.get",
+                DnsCommand::Set { .. } => "dns.set",
+            },
             Command::Privacy {
                 command: PrivacyCommand::List,
             } => "privacy.list",
@@ -84,6 +85,16 @@ pub enum PrivacyCommand {
 pub enum DnsCommand {
     /// Show nameserver mode and host records for a domain
     Get { domain: String },
+    /// Point a domain at custom nameservers (mutating)
+    Set {
+        domain: String,
+        /// Nameserver hostnames (registries require at least two)
+        #[arg(required = true, num_args = 2..)]
+        nameservers: Vec<String>,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

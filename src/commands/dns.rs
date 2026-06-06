@@ -86,6 +86,65 @@ pub fn get<T: Transport>(client: &Client<T>, domain: &str) -> Result<DnsInfo, Er
     })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetCustomResponse {
+    #[serde(rename = "DomainDNSSetCustomResult")]
+    result: SetCustomXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetCustomXml {
+    #[serde(rename = "@Domain")]
+    domain: String,
+    #[serde(rename = "@Updated", deserialize_with = "de_bool")]
+    updated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetResult {
+    pub domain: String,
+    pub updated: bool,
+    pub nameservers: Vec<String>,
+}
+
+/// Point a domain at custom nameservers (namecheap.domains.dns.setCustom).
+/// Mutating: goes through call_mut — production-gated, never auto-retried.
+pub fn set<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    nameservers: &[String],
+) -> Result<SetResult, Error> {
+    let (sld, tld) = split_sld_tld(domain)?;
+    let list = nameservers.join(",");
+    let body = client.call_mut(
+        "domains.dns.setCustom",
+        &[
+            ("SLD", sld.as_str()),
+            ("TLD", tld.as_str()),
+            ("NameServers", list.as_str()),
+        ],
+    )?;
+    let resp: SetCustomResponse = xml::parse(&body)?;
+    Ok(SetResult {
+        domain: resp.result.domain,
+        updated: resp.result.updated,
+        nameservers: nameservers.to_vec(),
+    })
+}
+
+pub fn render_set(result: &SetResult) {
+    println!(
+        "{}: nameservers {} ({})",
+        result.domain,
+        if result.updated {
+            "updated"
+        } else {
+            "NOT updated"
+        },
+        result.nameservers.join(", "),
+    );
+}
+
 pub fn render(info: &DnsInfo) {
     println!("domain: {}", info.domain);
     println!(

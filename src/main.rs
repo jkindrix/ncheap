@@ -49,6 +49,27 @@ fn main() -> ExitCode {
     }
 }
 
+/// Mutations require explicit confirmation: --yes, or an interactive
+/// y/N prompt when stdin is a terminal. Non-interactive callers (agents,
+/// scripts) without --yes are refused before any client work.
+fn confirm_mutation(description: &str, yes: bool) -> Result<(), ncheap::api::Error> {
+    use std::io::IsTerminal;
+    if yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(ncheap::api::Error::Usage(
+            "mutating commands require --yes in non-interactive use".into(),
+        ));
+    }
+    eprint!("{description} — proceed? [y/N] ");
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() || !line.trim().eq_ignore_ascii_case("y") {
+        return Err(ncheap::api::Error::Usage("mutation not confirmed".into()));
+    }
+    Ok(())
+}
+
 fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
     let name = cli.command.name();
     let profile = config::load(cli.profile.as_deref())?;
@@ -181,20 +202,40 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 Ok(())
             }
         },
-        Command::Dns {
-            command: DnsCommand::Get { domain },
-        } => {
-            let dns = commands::dns::get(&client, domain)?;
-            output::success(
-                cli.json,
-                name,
-                &dns,
-                client.profile(),
-                client.calls(),
-                || commands::dns::render(&dns),
-            );
-            Ok(())
-        }
+        Command::Dns { command } => match command {
+            DnsCommand::Get { domain } => {
+                let dns = commands::dns::get(&client, domain)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &dns,
+                    client.profile(),
+                    client.calls(),
+                    || commands::dns::render(&dns),
+                );
+                Ok(())
+            }
+            DnsCommand::Set {
+                domain,
+                nameservers,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!("set nameservers of {domain} to {}", nameservers.join(", ")),
+                    *yes,
+                )?;
+                let result = commands::dns::set(&client, domain, nameservers)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::dns::render_set(&result),
+                );
+                Ok(())
+            }
+        },
         Command::Privacy {
             command: PrivacyCommand::List,
         } => {

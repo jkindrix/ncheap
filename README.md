@@ -52,6 +52,7 @@ ncheap domains info example.com        # registration, privacy, DNS details
 ncheap domains lock example.com        # registrar (transfer) lock status
 ncheap domains contacts example.com    # contacts; PII redacted unless --full
 ncheap dns get example.com             # nameserver mode + host records
+ncheap dns set example.com ns1.host ns2.host   # mutating; see safety model
 ncheap privacy list                    # domain privacy subscriptions
 ncheap account balances                # amounts redacted unless --full
 ncheap account pricing --action REGISTER --product com   # cached 24h
@@ -124,10 +125,13 @@ tag. CI builds the binaries, checksums, and installer.
 - The API key is never written to logs, error messages, or request traces.
   Requests are sent as POST with a form body, so the key never appears in a
   URL; the HTTP agent is HTTPS-only and follows no redirects.
-- Read-only commands are the only ones implemented today. Mutating commands
-  (nameservers, privacy toggles, registration/renewal) will ship
-  sandbox-gated and disabled against production until explicitly enabled in
-  config, with `--yes` required for non-interactive use.
+- Mutating commands (currently `dns set`) are enforced at the client layer,
+  not per-command: they are refused against production unless the profile
+  sets `allow_production_mutations = true` **in the config file** (the
+  environment deliberately cannot arm this), they require `--yes`
+  non-interactively (or an interactive confirmation), and they never
+  auto-retry — an ambiguous failure after a mutation surfaces instead of
+  double-submitting. Sandbox profiles may always mutate.
 - Client-side throttling spaces requests ~3s apart **within one invocation**,
   with backoff on HTTP 429/5xx. Namecheap's FAQ has stated the per-minute
   key-wide limit as both 20/min and 50/min at different times (700/hour and

@@ -159,3 +159,55 @@ fn help_still_exits_0_with_usage_on_stdout() {
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
 }
+
+#[test]
+fn dns_set_without_yes_is_refused_non_interactively_before_network() {
+    let dir = temp_dir("setnoyes");
+    let mut cmd = ncheap(&dir);
+    fake_creds(&mut cmd);
+    let output = cmd
+        .args([
+            "dns",
+            "set",
+            "example.com",
+            "ns1.example.net",
+            "ns2.example.net",
+            "--json",
+        ])
+        .output()
+        .expect("run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON envelope");
+    assert_eq!(v["error"]["kind"], "usage");
+    assert!(v["error"]["message"].as_str().unwrap().contains("--yes"));
+}
+
+#[test]
+fn dns_set_against_production_is_refused_even_with_yes() {
+    let dir = temp_dir("setprod");
+    let mut cmd = ncheap(&dir);
+    fake_creds(&mut cmd); // production: no NCHEAP_SANDBOX, no config opt-in
+    let output = cmd
+        .args([
+            "dns",
+            "set",
+            "example.com",
+            "ns1.example.net",
+            "ns2.example.net",
+            "--yes",
+            "--json",
+        ])
+        .output()
+        .expect("run");
+
+    assert_eq!(output.status.code(), Some(3));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON envelope");
+    assert_eq!(v["error"]["kind"], "config");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("allow_production_mutations")
+    );
+}

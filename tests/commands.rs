@@ -628,3 +628,69 @@ fn pricing_cache_is_keyed_by_profile() {
 
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+#[test]
+fn dns_set_sends_nameservers_through_mutation_path() {
+    let inner = r#"<DomainDNSSetCustomResult Domain="domain.com" Updated="true" />"#;
+    let transport = FakeTransport::new(vec![envelope("domains.dns.setCustom", inner)]);
+    let client = test_client(transport); // sandbox profile: gate permits
+
+    let ns = vec!["ns1.example.net".to_owned(), "ns2.example.net".to_owned()];
+    let result = dns::set(&client, "domain.com", &ns).expect("set should succeed");
+
+    assert!(result.updated);
+    assert_eq!(result.domain, "domain.com");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(
+        param(&requests[0], "Command"),
+        Some("namecheap.domains.dns.setcustom")
+    );
+    assert_eq!(param(&requests[0], "SLD"), Some("domain"));
+    assert_eq!(param(&requests[0], "TLD"), Some("com"));
+    assert_eq!(
+        param(&requests[0], "NameServers"),
+        Some("ns1.example.net,ns2.example.net")
+    );
+}
+
+#[test]
+fn dns_set_is_gated_on_production_without_opt_in() {
+    let client = gate_client(FakeTransport::new(vec![]), false, false);
+
+    let ns = vec!["ns1.example.net".to_owned(), "ns2.example.net".to_owned()];
+    let err = dns::set(&client, "domain.com", &ns).expect_err("must be gated");
+
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+#[test]
+fn api_error_with_junk_command_response_surfaces_the_real_error() {
+    // Shape captured live from sandbox setCustom 2026-06-06: Status=ERROR
+    // still carries a CommandResponse whose attributes are empty strings.
+    // The typed parse must not run first and mask the API error.
+    let body = r#"<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="ERROR" xmlns="http://api.namecheap.com/xml.response">
+  <Errors>
+    <Error Number="3031166">Not allowed host: ns1.example.net.</Error>
+  </Errors>
+  <Warnings />
+  <RequestedCommand>namecheap.domains.dns.setcustom</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.dns.setCustom">
+    <DomainDNSSetCustomResult Domain="" Updated="" />
+  </CommandResponse>
+  <Server>TEST</Server>
+</ApiResponse>"#;
+    let transport = FakeTransport::new(vec![body.to_owned()]);
+    let client = test_client(transport);
+
+    let ns = vec!["ns1.example.net".to_owned(), "ns2.example.net".to_owned()];
+    let err = dns::set(&client, "domain.com", &ns).expect_err("API error must surface");
+
+    assert_eq!(
+        err.code(),
+        Some("3031166"),
+        "real error, not a parse failure: {err}"
+    );
+    assert!(err.to_string().contains("Not allowed host"));
+}

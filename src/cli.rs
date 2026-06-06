@@ -27,6 +27,17 @@ pub enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
+    /// DNS operations
+    Dns {
+        #[command(subcommand)]
+        command: DnsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DnsCommand {
+    /// Show nameserver mode and host records for a domain
+    Get { domain: String },
 }
 
 #[derive(Subcommand)]
@@ -41,6 +52,15 @@ pub enum DomainsCommand {
     },
     /// Show the registrar lock status of a domain
     Lock { domain: String },
+    /// Show registration, privacy, and DNS details for a domain
+    Info { domain: String },
+    /// Show domain contacts (PII redacted unless --full)
+    Contacts {
+        domain: String,
+        /// Show the actual contact fields
+        #[arg(long)]
+        full: bool,
+    },
 }
 
 #[derive(Subcommand)]

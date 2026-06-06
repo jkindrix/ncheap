@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use ncheap::api::{Client, HttpTransport};
-use ncheap::cli::{AccountCommand, Cli, Command, DomainsCommand};
+use ncheap::cli::{AccountCommand, Cli, Command, DnsCommand, DomainsCommand};
 use ncheap::{commands, config, output};
 
 fn main() -> ExitCode {
@@ -13,10 +13,15 @@ fn main() -> ExitCode {
             DomainsCommand::List => "domains.list",
             DomainsCommand::Check { .. } => "domains.check",
             DomainsCommand::Lock { .. } => "domains.lock",
+            DomainsCommand::Info { .. } => "domains.info",
+            DomainsCommand::Contacts { .. } => "domains.contacts",
         },
         Command::Account {
             command: AccountCommand::Balances { .. },
         } => "account.balances",
+        Command::Dns {
+            command: DnsCommand::Get { .. },
+        } => "dns.get",
     };
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -68,6 +73,43 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                 );
                 Ok(())
             }
+            DomainsCommand::Info { domain } => {
+                let info = commands::domains::info(&client, domain)?;
+                output::success(
+                    cli.json,
+                    "domains.info",
+                    &info,
+                    client.profile(),
+                    client.calls(),
+                    || commands::domains::render_info(&info),
+                );
+                Ok(())
+            }
+            DomainsCommand::Contacts { domain, full } => {
+                let contacts = commands::domains::contacts(&client, domain)?;
+                let human = || commands::domains::render_contacts(&contacts, *full);
+                if *full {
+                    output::success(
+                        cli.json,
+                        "domains.contacts",
+                        &contacts,
+                        client.profile(),
+                        client.calls(),
+                        human,
+                    );
+                } else {
+                    let view = commands::domains::contacts_redacted_view(&contacts);
+                    output::success(
+                        cli.json,
+                        "domains.contacts",
+                        &view,
+                        client.profile(),
+                        client.calls(),
+                        human,
+                    );
+                }
+                Ok(())
+            }
         },
         Command::Account {
             command: AccountCommand::Balances { full },
@@ -94,6 +136,20 @@ fn run(cli: &Cli) -> Result<(), ncheap::api::Error> {
                     human,
                 );
             }
+            Ok(())
+        }
+        Command::Dns {
+            command: DnsCommand::Get { domain },
+        } => {
+            let dns = commands::dns::get(&client, domain)?;
+            output::success(
+                cli.json,
+                "dns.get",
+                &dns,
+                client.profile(),
+                client.calls(),
+                || commands::dns::render(&dns),
+            );
             Ok(())
         }
     }

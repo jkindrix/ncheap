@@ -24,12 +24,15 @@ pub enum Error {
     Api { code: String, message: String },
     #[error("unexpected API response: {0}")]
     Parse(String),
+    #[error("{0}")]
+    Usage(String),
 }
 
 impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::Api { .. } | Error::Parse(_) => 1,
+            Error::Usage(_) => 2,
             Error::Config(_) => 3,
             Error::Transport(_) => 4,
             Error::RateLimited(_) => 5,
@@ -40,6 +43,7 @@ impl Error {
         match self {
             Error::Api { .. } => "api",
             Error::Parse(_) => "api",
+            Error::Usage(_) => "usage",
             Error::Config(_) => "config",
             Error::Transport(_) => "transport",
             Error::RateLimited(_) => "rate_limit",

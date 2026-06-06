@@ -45,9 +45,19 @@ Profile → Tools → API Access in the Namecheap dashboard.
 ## Usage
 
 ```
-ncheap domains list           # human-readable table
-ncheap domains list --json    # machine-readable envelope
+ncheap domains list                    # all domains, auto-paginated
+ncheap domains check example.com ...   # availability (up to 50 per call)
+ncheap domains info example.com        # registration, privacy, DNS details
+ncheap domains lock example.com        # registrar (transfer) lock status
+ncheap domains contacts example.com    # contacts; PII redacted unless --full
+ncheap dns get example.com             # nameserver mode + host records
+ncheap account balances                # amounts redacted unless --full
 ```
+
+Any command takes `--json` for the machine-readable envelope. Domains for
+`dns` commands may be IDN (normalized to punycode) and are split SLD/TLD via
+the Public Suffix List, so `example.co.uk` works; subdomains are rejected
+with a suggestion rather than silently trimmed.
 
 List commands auto-paginate: accounts with more than 20 domains are fetched
 completely, not truncated at the API's default page size.

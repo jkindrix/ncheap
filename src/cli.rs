@@ -11,6 +11,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub profile: Option<String>,
 
+    /// Refuse before any API call unless the resolved profile has this
+    /// name (guards against a leaked NCHEAP_PROFILE switching accounts)
+    #[arg(long, global = true, value_name = "NAME")]
+    pub expect_profile: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }

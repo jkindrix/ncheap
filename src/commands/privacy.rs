@@ -80,18 +80,35 @@ pub fn list<T: Transport>(client: &Client<T>) -> Result<Vec<PrivacySubscription>
 }
 
 /// The enable/disable API takes a WhoisguardID, not a domain; resolve it
-/// from the subscription list so callers can speak in domains.
+/// by paging the subscription list — stopping at the first match, so a
+/// large account doesn't spend its rate budget resolving one ID.
 fn resolve_id<T: Transport>(client: &Client<T>, domain: &str) -> Result<String, Error> {
     let normalized = crate::domain::normalize(domain)?;
-    let subs = list(client)?;
-    subs.iter()
-        .find(|s| s.domain_name.eq_ignore_ascii_case(&normalized))
-        .map(|s| s.id.clone())
-        .ok_or_else(|| {
-            Error::Usage(format!(
+    let mut seen = 0usize;
+    let mut page = 1usize;
+    loop {
+        let body = client.call(
+            "whoisguard.getList",
+            &[("Page", page.to_string().as_str()), ("PageSize", "100")],
+        )?;
+        let resp: GetListResponse = xml::parse(&body)?;
+        let page_len = resp.result.subscriptions.len();
+        if let Some(sub) = resp
+            .result
+            .subscriptions
+            .into_iter()
+            .find(|s| s.domain_name.eq_ignore_ascii_case(&normalized))
+        {
+            return Ok(sub.id);
+        }
+        seen += page_len;
+        if seen >= resp.paging.total_items || page_len == 0 || page >= 100 {
+            return Err(Error::Usage(format!(
                 "no domain privacy subscription is associated with {normalized}"
-            ))
-        })
+            )));
+        }
+        page += 1;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +179,7 @@ pub fn disable<T: Transport>(client: &Client<T>, domain: &str) -> Result<ToggleR
 }
 
 pub fn render_toggle(result: &ToggleResult) {
-    println!(
+    crate::safe_println!(
         "{}: privacy {} ({})",
         result.domain,
         if result.enabled {
@@ -179,12 +196,15 @@ pub fn render_toggle(result: &ToggleResult) {
 }
 
 pub fn render_table(subs: &[PrivacySubscription]) {
-    println!(
+    crate::safe_println!(
         "{:<12} {:<40} {:<12} {:<12} STATUS",
-        "ID", "DOMAIN", "CREATED", "EXPIRES"
+        "ID",
+        "DOMAIN",
+        "CREATED",
+        "EXPIRES"
     );
     for s in subs {
-        println!(
+        crate::safe_println!(
             "{:<12} {:<40} {:<12} {:<12} {}",
             s.id,
             if s.domain_name.is_empty() {

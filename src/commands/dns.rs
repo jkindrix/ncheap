@@ -152,7 +152,7 @@ pub fn set<T: Transport>(
 }
 
 pub fn render_set(result: &SetResult) {
-    println!(
+    crate::safe_println!(
         "{}: nameservers {} ({})",
         result.domain,
         if result.updated {
@@ -165,8 +165,8 @@ pub fn render_set(result: &SetResult) {
 }
 
 pub fn render(info: &DnsInfo) {
-    println!("domain: {}", info.domain);
-    println!(
+    crate::safe_println!("domain: {}", info.domain);
+    crate::safe_println!(
         "dns: {}",
         if info.is_using_our_dns {
             "namecheap"
@@ -175,21 +175,28 @@ pub fn render(info: &DnsInfo) {
         }
     );
     for ns in &info.nameservers {
-        println!("nameserver: {ns}");
+        crate::safe_println!("nameserver: {ns}");
     }
     match &info.host_records {
         Some(hosts) => {
-            println!(
+            crate::safe_println!(
                 "{:<30} {:<8} {:<8} {:<6} ADDRESS",
-                "NAME", "TYPE", "TTL", "MX"
+                "NAME",
+                "TYPE",
+                "TTL",
+                "MX"
             );
             for h in hosts {
-                println!(
+                crate::safe_println!(
                     "{:<30} {:<8} {:<8} {:<6} {}",
-                    h.name, h.record_type, h.ttl, h.mx_pref, h.address
+                    h.name,
+                    h.record_type,
+                    h.ttl,
+                    h.mx_pref,
+                    h.address
                 );
             }
         }
-        None => println!("(host records not managed by Namecheap)"),
+        None => crate::safe_println!("(host records not managed by Namecheap)"),
     }
 }

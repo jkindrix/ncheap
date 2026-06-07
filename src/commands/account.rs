@@ -57,25 +57,25 @@ fn covers_auto_renew(b: &Balances) -> Option<bool> {
 }
 
 pub fn render(b: &Balances, full: bool) {
-    println!("currency: {}", b.currency);
-    println!(
+    crate::safe_println!("currency: {}", b.currency);
+    crate::safe_println!(
         "funds_required_for_auto_renew: {}",
         b.funds_required_for_auto_renew
     );
     match covers_auto_renew(b) {
-        Some(v) => println!(
+        Some(v) => crate::safe_println!(
             "available_covers_auto_renew: {}",
             if v { "yes" } else { "no" }
         ),
-        None => println!("available_covers_auto_renew: unknown"),
+        None => crate::safe_println!("available_covers_auto_renew: unknown"),
     }
     if full {
-        println!("available_balance: {}", b.available_balance);
-        println!("account_balance: {}", b.account_balance);
-        println!("earned_amount: {}", b.earned_amount);
-        println!("withdrawable_amount: {}", b.withdrawable_amount);
+        crate::safe_println!("available_balance: {}", b.available_balance);
+        crate::safe_println!("account_balance: {}", b.account_balance);
+        crate::safe_println!("earned_amount: {}", b.earned_amount);
+        crate::safe_println!("withdrawable_amount: {}", b.withdrawable_amount);
     } else {
-        println!("(amounts redacted; pass --full to show them)");
+        crate::safe_println!("(amounts redacted; pass --full to show them)");
     }
 }
 
@@ -267,14 +267,25 @@ fn write_cache(path: &Path, rows: &[PriceRow]) {
 }
 
 pub fn render_pricing(rows: &[PriceRow]) {
-    println!(
+    crate::safe_println!(
         "{:<14} {:<12} {:<12} {:<5} {:<10} {:<10} CURRENCY",
-        "TYPE", "CATEGORY", "PRODUCT", "DUR", "PRICE", "YOURS"
+        "TYPE",
+        "CATEGORY",
+        "PRODUCT",
+        "DUR",
+        "PRICE",
+        "YOURS"
     );
     for r in rows {
-        println!(
+        crate::safe_println!(
             "{:<14} {:<12} {:<12} {:<5} {:<10} {:<10} {}",
-            r.product_type, r.category, r.product, r.duration, r.price, r.your_price, r.currency
+            r.product_type,
+            r.category,
+            r.product,
+            r.duration,
+            r.price,
+            r.your_price,
+            r.currency
         );
     }
 }

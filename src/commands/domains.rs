@@ -279,7 +279,7 @@ pub fn set_lock<T: Transport>(
 }
 
 pub fn render_set_lock(result: &SetLockResult) {
-    println!(
+    crate::safe_println!(
         "{}: registrar lock {} ({}; was {})",
         result.domain,
         if result.locked { "on" } else { "off" },
@@ -530,29 +530,29 @@ fn contact_summary(c: &Contact) -> serde_json::Value {
 }
 
 pub fn render_info(info: &DomainInfo) {
-    println!("domain: {}", info.domain);
-    println!("status: {}", info.status);
-    println!("owner: {} (is_owner: {})", info.owner, info.is_owner);
-    println!("created: {}", info.created);
-    println!("expires: {}", info.expires);
-    println!("premium: {}", if info.is_premium { "yes" } else { "no" });
+    crate::safe_println!("domain: {}", info.domain);
+    crate::safe_println!("status: {}", info.status);
+    crate::safe_println!("owner: {} (is_owner: {})", info.owner, info.is_owner);
+    crate::safe_println!("created: {}", info.created);
+    crate::safe_println!("expires: {}", info.expires);
+    crate::safe_println!("premium: {}", if info.is_premium { "yes" } else { "no" });
     match &info.privacy {
-        Some(p) => println!("privacy: {} (expires {})", p.enabled, p.expires),
-        None => println!("privacy: not reported"),
+        Some(p) => crate::safe_println!("privacy: {} (expires {})", p.enabled, p.expires),
+        None => crate::safe_println!("privacy: not reported"),
     }
     if let Some(provider) = &info.dns_provider {
-        println!("dns_provider: {provider}");
+        crate::safe_println!("dns_provider: {provider}");
     }
     for ns in &info.nameservers {
-        println!("nameserver: {ns}");
+        crate::safe_println!("nameserver: {ns}");
     }
     if let Some(all) = info.modification_rights_all {
-        println!("modification_rights_all: {all}");
+        crate::safe_println!("modification_rights_all: {all}");
     }
 }
 
 pub fn render_contacts(c: &Contacts, full: bool) {
-    println!("domain: {}", c.domain);
+    crate::safe_println!("domain: {}", c.domain);
     let sets: [(&str, &Contact); 4] = [
         ("registrant", &c.registrant),
         ("tech", &c.tech),
@@ -561,42 +561,49 @@ pub fn render_contacts(c: &Contacts, full: bool) {
     ];
     if full {
         for (label, contact) in sets {
-            println!("[{label}]");
-            println!("  name: {} {}", contact.first_name, contact.last_name);
+            crate::safe_println!("[{label}]");
+            crate::safe_println!("  name: {} {}", contact.first_name, contact.last_name);
             if !contact.organization_name.is_empty() {
-                println!("  organization: {}", contact.organization_name);
+                crate::safe_println!("  organization: {}", contact.organization_name);
             }
-            println!("  address: {} {}", contact.address1, contact.address2);
-            println!(
+            crate::safe_println!("  address: {} {}", contact.address1, contact.address2);
+            crate::safe_println!(
                 "  locality: {} {} {} {}",
-                contact.city, contact.state_province, contact.postal_code, contact.country
+                contact.city,
+                contact.state_province,
+                contact.postal_code,
+                contact.country
             );
-            println!(
+            crate::safe_println!(
                 "  phone: {} email: {}",
-                contact.phone, contact.email_address
+                contact.phone,
+                contact.email_address
             );
-            println!("  read_only: {}", contact.read_only);
+            crate::safe_println!("  read_only: {}", contact.read_only);
         }
     } else {
         let identical = c.registrant == c.tech && c.tech == c.admin && c.admin == c.aux_billing;
-        println!("all_contact_sets_identical: {identical}");
+        crate::safe_println!("all_contact_sets_identical: {identical}");
         for (label, contact) in sets {
-            println!(
+            crate::safe_println!(
                 "{label}: country {} read_only {}",
-                contact.country, contact.read_only
+                contact.country,
+                contact.read_only
             );
         }
-        println!("(contact details redacted; pass --full to show them)");
+        crate::safe_println!("(contact details redacted; pass --full to show them)");
     }
 }
 
 pub fn render_check(results: &[CheckResult]) {
-    println!(
+    crate::safe_println!(
         "{:<40} {:<10} {:<8} PRICE",
-        "DOMAIN", "AVAILABLE", "PREMIUM"
+        "DOMAIN",
+        "AVAILABLE",
+        "PREMIUM"
     );
     for r in results {
-        println!(
+        crate::safe_println!(
             "{:<40} {:<10} {:<8} {}",
             r.domain,
             if r.available { "yes" } else { "no" },
@@ -611,7 +618,7 @@ pub fn render_check(results: &[CheckResult]) {
 }
 
 pub fn render_lock(status: &LockStatus) {
-    println!(
+    crate::safe_println!(
         "{}: registrar lock {}",
         status.domain,
         if status.locked { "on" } else { "off" }
@@ -619,12 +626,17 @@ pub fn render_lock(status: &LockStatus) {
 }
 
 pub fn render_table(domains: &[Domain]) {
-    println!(
+    crate::safe_println!(
         "{:<40} {:<12} {:<6} {:<6} {:<12} {:<7}",
-        "NAME", "EXPIRES", "HOLD", "RENEW", "PRIVACY", "OURDNS"
+        "NAME",
+        "EXPIRES",
+        "HOLD",
+        "RENEW",
+        "PRIVACY",
+        "OURDNS"
     );
     for d in domains {
-        println!(
+        crate::safe_println!(
             "{:<40} {:<12} {:<6} {:<6} {:<12} {:<7}",
             d.name,
             d.expires,
@@ -882,7 +894,7 @@ pub fn renew<T: Transport>(
 }
 
 pub fn render_register(r: &RegisterResult) {
-    println!(
+    crate::safe_println!(
         "{}: {} for {} year(s) — listed {}, charged {} (order {}, transaction {})",
         r.domain,
         if r.registered {
@@ -899,7 +911,7 @@ pub fn render_register(r: &RegisterResult) {
 }
 
 pub fn render_renew(r: &RenewResult) {
-    println!(
+    crate::safe_println!(
         "{}: {} for {} year(s) — listed {}, charged {} (order {}, transaction {})",
         r.domain,
         if r.renewed { "renewed" } else { "NOT renewed" },

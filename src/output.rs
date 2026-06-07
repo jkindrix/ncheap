@@ -71,13 +71,34 @@ pub fn success<T: Serialize>(
     }
 }
 
+/// Strip C0/C1 control characters (except \n and \t) from
+/// server-controlled text before it reaches a terminal: a hostile API
+/// response must not inject escape sequences at the operator. JSON mode
+/// needs none of this — serde_json escapes control bytes.
+pub fn sanitize_for_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .filter(|c| !('\u{80}'..='\u{9F}').contains(c))
+        .collect()
+}
+
+/// println! that routes through sanitize_for_terminal: used by every
+/// human renderer that prints server-controlled strings. (`raw` is the
+/// documented exception — verbatim passthrough.)
+#[macro_export]
+macro_rules! safe_println {
+    ($($arg:tt)*) => {
+        println!("{}", $crate::output::sanitize_for_terminal(&format!($($arg)*)))
+    };
+}
+
 /// Emit the failure envelope on stdout (JSON mode) or a line on stderr.
 /// The process exit code is handled by the caller via Error::exit_code.
 pub fn failure(json_mode: bool, command: &str, err: &Error, resolved: Option<(&Profile, u32)>) {
     if json_mode {
         println!("{}", failure_envelope(command, err, resolved));
     } else {
-        eprintln!("error: {err}");
+        eprintln!("error: {}", sanitize_for_terminal(&err.to_string()));
     }
 }
 
@@ -134,6 +155,15 @@ mod tests {
 
         let v = failure_envelope("domains.list", &err, None);
         assert!(v["meta"].is_null(), "meta null before profile resolution");
+    }
+
+    #[test]
+    fn sanitize_strips_escape_sequences_but_keeps_whitespace() {
+        assert_eq!(
+            sanitize_for_terminal("evil\u{1b}[31mred\u{1b}]0;title\u{7}\u{9b}x"),
+            "evil[31mred]0;titlex"
+        );
+        assert_eq!(sanitize_for_terminal("a\nb\tc"), "a\nb\tc");
     }
 
     #[test]

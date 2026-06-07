@@ -49,6 +49,17 @@ fn main() -> ExitCode {
             return ExitCode::from(err.exit_code());
         }
     };
+    if let Some(expected) = &cli.expect_profile
+        && expected != &profile.name
+    {
+        let err = ncheap::api::Error::Usage(format!(
+            "resolved profile is {:?} but --expect-profile requires {expected:?}; \
+             refusing before any API call",
+            profile.name
+        ));
+        output::failure(cli.json, name, &err, None);
+        return ExitCode::from(err.exit_code());
+    }
     let mut client = Client::new(HttpTransport::new(), profile);
     // Mutation journal: intent-before/outcome-after for every call_mut.
     client.set_journal_dir(

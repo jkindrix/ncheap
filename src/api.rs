@@ -161,6 +161,43 @@ impl Transport for HttpTransport {
     }
 }
 
+/// Exclusive advisory lock on the ledger lock file; released on drop
+/// (std::fs::File::lock, stable since Rust 1.89 — hence the MSRV).
+fn acquire_ledger_lock(dir: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(dir.join("spend.lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
+/// Exclusive lock on the cross-process throttle file; released on drop.
+fn acquire_throttle_lock(dir: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(dir.join("throttle.lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn unix_now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -310,11 +347,19 @@ impl<T: Transport> Client<T> {
                 ));
             }
         };
-        if self.journal_dir.is_none() {
+        let Some(dir) = &self.journal_dir else {
             return Err(Error::Policy(
                 "max_daily_spend is set but no state directory is available to track it".into(),
             ));
-        }
+        };
+        // Exclusive lock held across check + append: two concurrent
+        // purchases must not both pass the cap check (TOCTOU on a
+        // financial control). Released on drop.
+        let _lock = acquire_ledger_lock(dir).map_err(|e| {
+            Error::Policy(format!(
+                "cannot lock the spend ledger ({e}); refusing to purchase"
+            ))
+        })?;
         let spent = self.spend_last_24h().map_err(|e| {
             Error::Policy(format!(
                 "cannot read the spend ledger ({e}); refusing to purchase"
@@ -533,7 +578,33 @@ impl<T: Transport> Client<T> {
     }
 
     fn throttle(&self) {
-        if let Some(prev) = self.last_call.get()
+        // Cross-process spacing first: serialize on a state-dir lock file
+        // recording the last call time (millis). Fail-open — rate budget
+        // is availability, not safety; a broken state dir must not brick
+        // reads. The in-process Cell remains as a cheap second layer.
+        if let Some(dir) = &self.journal_dir
+            && self.spacing > Duration::ZERO
+            && let Ok(lock) = acquire_throttle_lock(dir)
+        {
+            use std::io::{Read, Seek, Write};
+            let mut file = lock;
+            let mut buf = String::new();
+            let _ = (&file).read_to_string(&mut buf);
+            let now_ms = unix_now_millis();
+            if let Ok(prev_ms) = buf.trim().parse::<u128>() {
+                let elapsed = now_ms.saturating_sub(prev_ms);
+                let spacing_ms = self.spacing.as_millis();
+                if elapsed < spacing_ms {
+                    // Held lock during the sleep: concurrent processes
+                    // queue here, which is exactly the serialization the
+                    // key-wide budget needs.
+                    thread::sleep(Duration::from_millis((spacing_ms - elapsed) as u64));
+                }
+            }
+            let _ = file.set_len(0);
+            let _ = file.seek(std::io::SeekFrom::Start(0));
+            let _ = write!(file, "{}", unix_now_millis());
+        } else if let Some(prev) = self.last_call.get()
             && prev.elapsed() < self.spacing
         {
             thread::sleep(self.spacing - prev.elapsed());

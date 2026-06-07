@@ -303,3 +303,52 @@ fn success_envelope_through_real_binary() {
     );
     assert!(request.contains("ApiKey=k"), "key travels in the form body");
 }
+
+#[test]
+fn expect_profile_mismatch_refuses_before_any_call() {
+    let dir = temp_dir("expectprofile");
+    let mut cmd = ncheap(&dir);
+    fake_creds(&mut cmd); // resolves to the default "production" name
+    let output = cmd
+        .args(["--expect-profile", "sandbox", "domains", "list", "--json"])
+        .output()
+        .expect("run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("envelope");
+    assert_eq!(v["error"]["kind"], "usage");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--expect-profile")
+    );
+}
+
+#[test]
+fn expect_profile_match_proceeds() {
+    let dir = temp_dir("expectprofile-ok");
+    let mut cmd = ncheap(&dir);
+    fake_creds(&mut cmd);
+    // Passes the profile assertion, then fails at the subdomain check —
+    // proving the assertion did not block a matching profile.
+    let output = cmd
+        .args([
+            "--expect-profile",
+            "production",
+            "dns",
+            "get",
+            "www.example.com",
+            "--json",
+        ])
+        .output()
+        .expect("run");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("envelope");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("registrable"),
+        "must fail at the LATER subdomain check: {v}"
+    );
+}

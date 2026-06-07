@@ -7,13 +7,19 @@ and non-interactive operation by default.
 **Status: early development (0.x).** Full read-only surface plus gated
 mutating commands (DNS, privacy, register/renew) are implemented.
 
-## Build
+## Install
 
 ```
-cargo build --release
+cargo install ncheap                  # from crates.io
+cargo build --release                 # or from source: target/release/ncheap
 ```
 
-Produces a single binary at `target/release/ncheap`.
+Fleets should pin a version rather than float on `latest`: each GitHub
+release ships per-target tarballs with sha256 checksums, a version-pinned
+installer (`https://github.com/jkindrix/ncheap/releases/download/vX.Y.Z/ncheap-installer.sh`),
+and build-provenance attestations (verifiable with
+`gh attestation verify`). The `releases/latest` installer URL floats and
+is not recommended for automation.
 
 ## Configuration
 
@@ -189,7 +195,12 @@ sustained agentic operation is at the account owner's risk.
   config-file-only like the gate) bounds cumulative purchases via a local
   0600 ledger; **production purchases are refused entirely until a cap is
   set**, so arming the mutation gate never exposes unlimited spend.
-  Sandbox is unlimited when uncapped.
+  Sandbox is unlimited when uncapped. The cap check holds a file lock
+  across check-and-reserve, so concurrent purchases on one machine cannot
+  both pass. A purchase that fails after reservation still consumes its
+  budget for 24h (fails in the safe direction). The journal and spend
+  ledger are append-only and never pruned; at sustained agentic volume,
+  rotate them externally.
 - Mutating commands (`dns set`, `privacy enable/disable`, `domains
   register/renew`) are enforced at the client layer,
   not per-command: they are refused against production unless the profile
@@ -201,9 +212,11 @@ sustained agentic operation is at the account owner's risk.
 - Client-side throttling spaces requests ~3s apart **within one invocation**,
   with backoff on HTTP 429/5xx. Namecheap's FAQ documents 50/min (plus
   700/hour and 8000/day) key-wide; older third-party reports say 20/min;
-  ncheap spaces for the conservative figure. Concurrent ncheap processes do
-  not coordinate: they share one key budget, so run at most 2 concurrent
-  processes per key until a cross-process budget exists.
+  ncheap spaces for the conservative figure. Concurrent ncheap processes on
+  one machine coordinate through a lock file in the state directory, so
+  parallel invocations are serialized to the same spacing (fail-open: if
+  the state directory is unavailable, spacing falls back to per-process).
+  Processes on different machines sharing one key still do not coordinate.
 
 ## License
 

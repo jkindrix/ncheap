@@ -1351,3 +1351,67 @@ fn http_405_maps_to_rate_limit_without_retry() {
         "a throttle response must not be retried into the throttle"
     );
 }
+
+// --- backlog round: resolve_id early exit, cross-process throttle ---
+
+#[test]
+fn privacy_resolution_stops_at_first_matching_page() {
+    fn page(ids: std::ops::Range<u32>, total: usize) -> String {
+        let subs: String = ids
+            .map(|i| format!(r#"<Whoisguard ID="{i}" DomainName="d{i}.example" Created="05/13/2025" Expires="05/13/2027" Status="ENABLED" />"#))
+            .collect();
+        envelope(
+            "whoisguard.getList",
+            &format!(
+                r#"<WhoisguardGetListResult>{subs}</WhoisguardGetListResult>
+<Paging><TotalItems>{total}</TotalItems><CurrentPage>1</CurrentPage><PageSize>100</PageSize></Paging>"#
+            ),
+        )
+    }
+    // 250 subscriptions; the target is on page 1. Only ONE call may happen.
+    let enable_inner = r#"<WhoisguardEnableResult DomainName="d7.example" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![
+        page(0..100, 250),
+        envelope("whoisguard.enable", enable_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = privacy::enable(&client, "d7.example", "ops@example.org").expect("enable");
+
+    assert_eq!(result.privacy_id, "7");
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        2,
+        "one resolution page + the mutation; not the whole 250-sub listing"
+    );
+}
+
+#[test]
+fn cross_process_throttle_spaces_two_clients_sharing_state() {
+    let dir = journal_dir("xproc");
+    let mk = |fixtures: Vec<String>| {
+        let mut c = Client::new(FakeTransport::new(fixtures), test_profile());
+        c.set_timing(
+            std::time::Duration::from_millis(250),
+            std::time::Duration::ZERO,
+        );
+        c.set_journal_dir(Some(dir.clone()));
+        c
+    };
+    let balances_inner = r#"<UserGetBalancesResult Currency="USD" AvailableBalance="1.00" AccountBalance="1.00" EarnedAmount="0.00" WithdrawableAmount="0.00" FundsRequiredForAutoRenew="0.00" />"#;
+
+    let a = mk(vec![envelope("users.getBalances", balances_inner)]);
+    account::balances(&a).expect("a");
+
+    // A separate Client (≈ separate process): its first call must still be
+    // spaced against A's via the shared throttle file.
+    let b = mk(vec![envelope("users.getBalances", balances_inner)]);
+    let start = std::time::Instant::now();
+    account::balances(&b).expect("b");
+    assert!(
+        start.elapsed() >= std::time::Duration::from_millis(150),
+        "second client must wait out the shared spacing, waited {:?}",
+        start.elapsed()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

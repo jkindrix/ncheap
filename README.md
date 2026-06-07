@@ -124,7 +124,7 @@ profile/sandbox, and is `null` only for pre-configuration errors.
 | 2 | Usage error (bad arguments) |
 | 3 | Configuration / credential / policy error |
 | 4 | Transport / network error |
-| 5 | Rate-limited: HTTP 429 after backoff, or the API's in-band throttle error 500000 (the latter mapping is best-effort — the error code is observed behavior, not documented) |
+| 5 | Rate-limited. Namecheap documents no rate-limit response; ncheap maps three observed/reported shapes best-effort: HTTP 429 (after one backoff retry), in-band error 500000 (third-party reports), and HTTP 405 with an HTML body (the shape actually captured live, sandbox 2026-06-07) |
 
 #### Envelope compatibility
 

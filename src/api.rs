@@ -513,6 +513,13 @@ impl<T: Transport> Client<T> {
         match attempt {
             Ok(body) => Ok(body),
             Err(TransportFailure::Status(429)) => Err(Error::RateLimited("HTTP 429".into())),
+            // Observed live (sandbox, 2026-06-07): the actual rate limiter
+            // answers HTTP 405 with an HTML page — neither the documented
+            // 429 nor the rumored in-band 500000. Mapped so agents get the
+            // back-off signal; best-effort, like every rate-limit shape here.
+            Err(TransportFailure::Status(405)) => Err(Error::RateLimited(
+                "HTTP 405 — the rate-limit shape observed live".into(),
+            )),
             Err(TransportFailure::Status(code)) => {
                 Err(Error::Transport(format!("HTTP status {code}")))
             }

@@ -1332,3 +1332,22 @@ fn corrupt_spend_ledger_refuses_purchases() {
     assert!(err.to_string().contains("ledger"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn http_405_maps_to_rate_limit_without_retry() {
+    // Captured live 2026-06-07: the sandbox rate limiter answers HTTP 405
+    // (HTML body), not 429 and not in-band error 500000.
+    use ncheap::api::TransportFailure;
+    let transport = FakeTransport::with_results(vec![Err(TransportFailure::Status(405))]);
+    let client = test_client(transport);
+
+    let err = account::balances(&client).expect_err("rate limited");
+
+    assert_eq!(err.exit_code(), 5);
+    assert_eq!(err.kind(), "rate_limit");
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "a throttle response must not be retried into the throttle"
+    );
+}

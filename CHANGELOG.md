@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-07
+
+Spend caps and live verification of the failure modes. With this release
+every precondition for arming production mutations is met.
+
+### Added
+
+- `max_daily_spend` profile field: a rolling-24h purchase budget enforced
+  via a fail-closed 0600 ledger (`spend.jsonl`), recording listed prices
+  at reservation. Config-file-only — the environment cannot raise a
+  budget. **Production purchases are refused entirely until a cap is
+  set**, so arming the mutation gate never exposes unlimited spend;
+  sandbox is unlimited when uncapped (still recorded).
+
+### Changed
+
+- HTTP 405 now maps to `rate_limit`/exit 5: a deliberate burst against
+  the live (sandbox) API showed the real rate limiter answers 405 with an
+  HTML page — not the conventional 429 and not the third-party-reported
+  in-band error 500000. All three shapes map to exit 5, each best-effort.
+
+### Verified
+
+- Interrupted-mutation handling end-to-end: a SIGKILL mid-renew leaves an
+  intent record without an outcome in the journal, and reconciliation via
+  `domains info` correctly distinguishes committed from not-committed.
+
 ## [0.4.0] - 2026-06-07
 
 Purchase-path hardening from the fifth external review, plus the mutation
@@ -123,6 +150,7 @@ Initial release: the complete read-only command surface.
 - IDN (punycode) normalization and Public Suffix List-aware domain
   validation on all domain arguments
 
+[0.5.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.2.0

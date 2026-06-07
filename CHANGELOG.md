@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-07
+
+Purchase-path hardening from the fifth external review, plus the mutation
+journal. Envelope changes are additive (schema stays 3).
+
+### Added
+
+- Mutation journal: append-only 0600 JSONL at
+  `~/.local/state/ncheap/mutations.jsonl` — fsync'd intent record before
+  every mutation, outcome record after, pre-image notes (previous
+  nameservers, previous lock state). If intent cannot be recorded, the
+  mutation is refused. An interrupted mutation is detectable as an
+  intent without an outcome.
+- `domains lock --lock` / `--unlock` — registrar transfer lock toggle
+  (envelope command `domains.lock.set`), with the pre-image in the result
+- `charged_exceeded_max_price` flag on register/renew results
+- `previous_nameservers` on `dns set` results
+
+### Changed
+
+- Mutation-outcome response fields no longer default: upstream drift
+  fails as a parse error instead of a false "registered: false"
+- The price guard matches pricing rows by action category and product,
+  not just duration
+- Early Access Phase (EAP) domains are refused at register, like premium
+- The production-mutation gate fires before any preparatory read: a
+  refused mutation generates zero API traffic
+- Pricing cache files are written 0600
+- Key redaction skips sub-8-char keys and covers the percent-encoded form
+
 ## [0.3.0] - 2026-06-07
 
 Envelope schema 3 — driven by first-consumer feedback from an AI agent.
@@ -93,6 +123,7 @@ Initial release: the complete read-only command surface.
 - IDN (punycode) normalization and Public Suffix List-aware domain
   validation on all domain arguments
 
+[0.4.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.1.0

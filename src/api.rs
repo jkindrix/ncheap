@@ -161,6 +161,13 @@ impl Transport for HttpTransport {
     }
 }
 
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Replace the key (raw and percent-encoded) in an error string. Keys
 /// shorter than 8 chars are not replaced: real keys are 32-char hex, and
 /// substring-replacing a tiny test key only mangles unrelated words.
@@ -192,6 +199,12 @@ pub struct Client<T: Transport> {
     calls: Cell<u32>,
     spacing: Duration,
     retry_backoff: Duration,
+    /// Mutation journal directory. When set, every call_mut appends an
+    /// intent record (fsync'd, fail-closed) before the request and an
+    /// outcome record after — the only host-local substrate for
+    /// reconciling an interrupted mutation. None disables journaling
+    /// (library/test use); the binary always sets it.
+    journal_dir: Option<std::path::PathBuf>,
 }
 
 impl<T: Transport> Client<T> {
@@ -203,7 +216,12 @@ impl<T: Transport> Client<T> {
             calls: Cell::new(0),
             spacing: MIN_SPACING,
             retry_backoff: RETRY_BACKOFF,
+            journal_dir: None,
         }
+    }
+
+    pub fn set_journal_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        self.journal_dir = dir;
     }
 
     /// Override throttle spacing and retry backoff (tests use zero so the
@@ -262,7 +280,104 @@ impl<T: Transport> Client<T> {
     /// sets allow_production_mutations.
     pub fn call_mut(&self, command: &str, params: &[(&str, &str)]) -> Result<String, Error> {
         self.require_mutations_permitted()?;
-        self.dispatch(&canonical_command(command), params, false)
+        let canonical = canonical_command(command);
+        let seq = format!("{}-{}", std::process::id(), self.calls.get() + 1);
+        self.journal_intent(&seq, &canonical, params)?;
+        let result = self.dispatch(&canonical, params, false);
+        self.journal_outcome(&seq, &result);
+        result
+    }
+
+    /// Best-effort context record (e.g. a pre-image) ahead of a mutation.
+    pub fn journal_note(&self, command: &str, data: serde_json::Value) {
+        let _ = self.journal_append(
+            serde_json::json!({
+                "ts": unix_now(),
+                "kind": "note",
+                "profile": self.profile.name,
+                "sandbox": self.profile.sandbox,
+                "command": command,
+                "data": data,
+            }),
+            false,
+        );
+    }
+
+    /// Fail-closed: if the intent cannot be durably recorded, the mutation
+    /// does not happen — an unjournaled ambiguous outcome is the one state
+    /// this control exists to prevent. Params here never contain auth
+    /// fields (dispatch adds those after).
+    fn journal_intent(
+        &self,
+        seq: &str,
+        command: &str,
+        params: &[(&str, &str)],
+    ) -> Result<(), Error> {
+        if self.journal_dir.is_none() {
+            return Ok(());
+        }
+        let params: serde_json::Map<String, serde_json::Value> = params
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), serde_json::Value::from(*v)))
+            .collect();
+        self.journal_append(
+            serde_json::json!({
+                "ts": unix_now(),
+                "seq": seq,
+                "kind": "intent",
+                "profile": self.profile.name,
+                "sandbox": self.profile.sandbox,
+                "command": command,
+                "params": params,
+            }),
+            true,
+        )
+        .map_err(|e| {
+            Error::Policy(format!(
+                "cannot record mutation intent in the journal ({e}); refusing to mutate"
+            ))
+        })
+    }
+
+    /// Best-effort: the mutation already happened; a journal hiccup must
+    /// not turn a success into an error.
+    fn journal_outcome(&self, seq: &str, result: &Result<String, Error>) {
+        let record = match result {
+            Ok(body) => serde_json::json!({
+                "ts": unix_now(),
+                "seq": seq,
+                "kind": "outcome",
+                "ok": true,
+                "body_excerpt": body.chars().take(500).collect::<String>(),
+            }),
+            Err(e) => serde_json::json!({
+                "ts": unix_now(),
+                "seq": seq,
+                "kind": "outcome",
+                "ok": false,
+                "error": e.to_string(),
+            }),
+        };
+        let _ = self.journal_append(record, false);
+    }
+
+    fn journal_append(&self, record: serde_json::Value, fsync: bool) -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let Some(dir) = &self.journal_dir else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(dir)?;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(dir.join("mutations.jsonl"))?;
+        writeln!(file, "{record}")?;
+        if fsync {
+            file.sync_all()?;
+        }
+        Ok(())
     }
 
     fn dispatch(

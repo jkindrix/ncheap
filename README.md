@@ -55,6 +55,7 @@ ncheap domains list                    # all domains, auto-paginated
 ncheap domains check example.com ...   # availability (up to 50 per call)
 ncheap domains info example.com        # registration, privacy, DNS details
 ncheap domains lock example.com        # registrar (transfer) lock status
+ncheap domains lock example.com --lock     # mutating; also --unlock
 ncheap domains contacts example.com    # contacts; PII redacted unless --full
 ncheap dns get example.com             # nameserver mode + host records
 ncheap dns set example.com ns1.host ns2.host   # mutating; see safety model
@@ -166,10 +167,16 @@ sustained agentic operation is at the account owner's risk.
   key supplied via `NCHEAP_API_KEY` is visible in `/proc/<pid>/environ` to
   same-user processes and may land in shell history; the 0600 config file
   is the preferred channel on shared or backed-up machines.
+- Every mutation is journaled to an append-only, 0600 JSONL file
+  (`~/.local/state/ncheap/mutations.jsonl`): an fsync'd intent record
+  before the request, an outcome record after, and pre-images (previous
+  nameservers / lock state) where the API offers no undo. If the intent
+  cannot be recorded, the mutation is refused.
 - An interrupted mutation (killed process, network drop after send) has an
   unknown outcome — the charge or change may have committed server-side.
-  Never blind-retry an interrupted `register`/`renew`/`dns set`; reconcile
-  first via `domains list`/`domains info`/`account balances`.
+  Never blind-retry an interrupted `register`/`renew`/`dns set`; consult
+  the mutation journal and reconcile via `domains list`/`domains info`/
+  `account balances` first.
 - Purchasing commands (`domains register`, `domains renew`) additionally
   require `--max-price` and refuse pre-flight if the **live** listed price
   exceeds it — the pricing cache is never consulted for purchase decisions.

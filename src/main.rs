@@ -49,7 +49,14 @@ fn main() -> ExitCode {
             return ExitCode::from(err.exit_code());
         }
     };
-    let client = Client::new(HttpTransport::new(), profile);
+    let mut client = Client::new(HttpTransport::new(), profile);
+    // Mutation journal: intent-before/outcome-after for every call_mut.
+    client.set_journal_dir(
+        dirs::state_dir()
+            .or_else(dirs::data_local_dir)
+            .map(|d| d.join("ncheap")),
+    );
+    let client = client;
     match run(&cli, &client) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -109,16 +116,41 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
                 );
                 Ok(())
             }
-            DomainsCommand::Lock { domain } => {
-                let status = commands::domains::lock_status(client, domain)?;
-                output::success(
-                    cli.json,
-                    name,
-                    &status,
-                    client.profile(),
-                    client.calls(),
-                    || commands::domains::render_lock(&status),
-                );
+            DomainsCommand::Lock {
+                domain,
+                lock,
+                unlock,
+                yes,
+            } => {
+                if *lock || *unlock {
+                    let target = *lock;
+                    confirm_mutation(
+                        &format!(
+                            "turn registrar lock {} for {domain}",
+                            if target { "ON" } else { "OFF" }
+                        ),
+                        *yes,
+                    )?;
+                    let result = commands::domains::set_lock(client, domain, target)?;
+                    output::success(
+                        cli.json,
+                        name,
+                        &result,
+                        client.profile(),
+                        client.calls(),
+                        || commands::domains::render_set_lock(&result),
+                    );
+                } else {
+                    let status = commands::domains::lock_status(client, domain)?;
+                    output::success(
+                        cli.json,
+                        name,
+                        &status,
+                        client.profile(),
+                        client.calls(),
+                        || commands::domains::render_lock(&status),
+                    );
+                }
                 Ok(())
             }
             DomainsCommand::Info { domain } => {

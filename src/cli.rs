@@ -55,7 +55,13 @@ impl Command {
             Command::Domains { command } => match command {
                 DomainsCommand::List => "domains.list",
                 DomainsCommand::Check { .. } => "domains.check",
-                DomainsCommand::Lock { .. } => "domains.lock",
+                DomainsCommand::Lock { lock, unlock, .. } => {
+                    if *lock || *unlock {
+                        "domains.lock.set"
+                    } else {
+                        "domains.lock"
+                    }
+                }
                 DomainsCommand::Info { .. } => "domains.info",
                 DomainsCommand::Contacts { .. } => "domains.contacts",
                 DomainsCommand::Register { .. } => "domains.register",
@@ -128,8 +134,19 @@ pub enum DomainsCommand {
         #[arg(required = true)]
         domains: Vec<String>,
     },
-    /// Show the registrar lock status of a domain
-    Lock { domain: String },
+    /// Show — or with --lock/--unlock, set — the registrar transfer lock
+    Lock {
+        domain: String,
+        /// Turn the transfer lock on (mutating)
+        #[arg(long, conflicts_with = "unlock")]
+        lock: bool,
+        /// Turn the transfer lock off (mutating)
+        #[arg(long)]
+        unlock: bool,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show registration, privacy, and DNS details for a domain
     Info { domain: String },
     /// Show domain contacts (PII redacted unless --full)

@@ -218,6 +218,84 @@ pub struct LockStatus {
     pub locked: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetLockResponse {
+    #[serde(rename = "DomainSetRegistrarLockResult")]
+    result: SetLockXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetLockXml {
+    #[serde(rename = "@Domain", default)]
+    domain: String,
+    // No default on the outcome field — drift fails as parse (see CreateXml).
+    #[serde(rename = "@IsSuccess", deserialize_with = "de_bool")]
+    is_success: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetLockResult {
+    pub domain: String,
+    pub locked: bool,
+    pub is_success: bool,
+    /// Pre-image: the lock state that was replaced.
+    pub previously_locked: bool,
+}
+
+/// Set the registrar (transfer) lock (mutating). Reads the current state
+/// first as the journaled pre-image.
+pub fn set_lock<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    lock: bool,
+) -> Result<SetLockResult, Error> {
+    client.require_mutations_permitted()?;
+    let domain = crate::domain::normalize(domain)?;
+    let before = lock_status(client, &domain)?;
+    client.journal_note(
+        "domains.lock.set",
+        serde_json::json!({
+            "domain": domain,
+            "previously_locked": before.locked,
+            "requested": if lock { "LOCK" } else { "UNLOCK" },
+        }),
+    );
+    let action = if lock { "LOCK" } else { "UNLOCK" };
+    let body = client.call_mut(
+        "domains.setRegistrarLock",
+        &[("DomainName", domain.as_str()), ("LockAction", action)],
+    )?;
+    let resp: SetLockResponse = xml::parse(&body)?;
+    Ok(SetLockResult {
+        domain: if resp.result.domain.is_empty() {
+            domain
+        } else {
+            resp.result.domain
+        },
+        locked: lock,
+        is_success: resp.result.is_success,
+        previously_locked: before.locked,
+    })
+}
+
+pub fn render_set_lock(result: &SetLockResult) {
+    println!(
+        "{}: registrar lock {} ({}; was {})",
+        result.domain,
+        if result.locked { "on" } else { "off" },
+        if result.is_success {
+            "success"
+        } else {
+            "NOT successful"
+        },
+        if result.previously_locked {
+            "on"
+        } else {
+            "off"
+        },
+    );
+}
+
 /// Read-only registrar lock status (namecheap.domains.getRegistrarLock).
 pub fn lock_status<T: Transport>(client: &Client<T>, domain: &str) -> Result<LockStatus, Error> {
     let domain = crate::domain::normalize(domain)?;

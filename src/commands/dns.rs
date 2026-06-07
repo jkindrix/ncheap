@@ -105,6 +105,9 @@ pub struct SetResult {
     pub domain: String,
     pub updated: bool,
     pub nameservers: Vec<String>,
+    /// The nameservers that were replaced (pre-image): the manual-undo
+    /// input, also journaled before the mutation.
+    pub previous_nameservers: Vec<String>,
 }
 
 /// Point a domain at custom nameservers (namecheap.domains.dns.setCustom).
@@ -116,6 +119,20 @@ pub fn set<T: Transport>(
 ) -> Result<SetResult, Error> {
     client.require_mutations_permitted()?;
     let (sld, tld) = split_sld_tld(domain)?;
+    // Pre-image: setCustom is full-replace with no upstream undo, so the
+    // outgoing nameservers are fetched and journaled before the mutation.
+    let pre_params = [("SLD", sld.as_str()), ("TLD", tld.as_str())];
+    let pre_body = client.call("domains.dns.getList", &pre_params)?;
+    let pre: GetListResponse = xml::parse(&pre_body)?;
+    let previous_nameservers = pre.result.nameservers;
+    client.journal_note(
+        "dns.set",
+        serde_json::json!({
+            "domain": domain,
+            "previous_nameservers": previous_nameservers,
+            "is_using_our_dns": pre.result.is_using_our_dns,
+        }),
+    );
     let list = nameservers.join(",");
     let body = client.call_mut(
         "domains.dns.setCustom",
@@ -130,6 +147,7 @@ pub fn set<T: Transport>(
         domain: resp.result.domain,
         updated: resp.result.updated,
         nameservers: nameservers.to_vec(),
+        previous_nameservers,
     })
 }
 

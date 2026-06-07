@@ -630,9 +630,17 @@ fn pricing_cache_is_keyed_by_profile() {
 }
 
 #[test]
-fn dns_set_sends_nameservers_through_mutation_path() {
+fn dns_set_fetches_pre_image_then_mutates() {
+    let list_inner = r#"
+<DomainDNSGetListResult Domain="domain.com" IsUsingOurDNS="true">
+  <Nameserver>dns1.registrar-servers.com</Nameserver>
+  <Nameserver>dns2.registrar-servers.com</Nameserver>
+</DomainDNSGetListResult>"#;
     let inner = r#"<DomainDNSSetCustomResult Domain="domain.com" Updated="true" />"#;
-    let transport = FakeTransport::new(vec![envelope("domains.dns.setCustom", inner)]);
+    let transport = FakeTransport::new(vec![
+        envelope("domains.dns.getList", list_inner),
+        envelope("domains.dns.setCustom", inner),
+    ]);
     let client = test_client(transport); // sandbox profile: gate permits
 
     let ns = vec!["ns1.example.net".to_owned(), "ns2.example.net".to_owned()];
@@ -640,15 +648,21 @@ fn dns_set_sends_nameservers_through_mutation_path() {
 
     assert!(result.updated);
     assert_eq!(result.domain, "domain.com");
-    let requests = client.transport().requests.borrow();
     assert_eq!(
-        param(&requests[0], "Command"),
+        result.previous_nameservers,
+        ["dns1.registrar-servers.com", "dns2.registrar-servers.com"],
+        "pre-image captured for undo"
+    );
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 2, "pre-image read then mutation");
+    assert_eq!(
+        param(&requests[1], "Command"),
         Some("namecheap.domains.dns.setcustom")
     );
-    assert_eq!(param(&requests[0], "SLD"), Some("domain"));
-    assert_eq!(param(&requests[0], "TLD"), Some("com"));
+    assert_eq!(param(&requests[1], "SLD"), Some("domain"));
+    assert_eq!(param(&requests[1], "TLD"), Some("com"));
     assert_eq!(
-        param(&requests[0], "NameServers"),
+        param(&requests[1], "NameServers"),
         Some("ns1.example.net,ns2.example.net")
     );
 }
@@ -1059,4 +1073,124 @@ fn short_test_keys_are_not_mangled_by_redaction() {
         err.to_string().contains("failed to lookup address"),
         "short key must not mangle the message: {err}"
     );
+}
+
+// --- mutation journal (F2) and domains lock set ---
+
+fn journal_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ncheap-journal-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn mutations_write_intent_and_outcome_records() {
+    let dir = journal_dir("happy");
+    let inner = r#"<WhoisguardEnableResult DomainName="d1.example" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![
+        privacy_list_page_with("d1.example", "5924316"),
+        envelope("whoisguard.enable", inner),
+    ]);
+    let mut client = Client::new(transport, test_profile());
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client.set_journal_dir(Some(dir.clone()));
+
+    privacy::enable(&client, "d1.example", "ops@example.org").expect("enable");
+
+    let log = std::fs::read_to_string(dir.join("mutations.jsonl")).expect("journal exists");
+    let records: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("valid JSONL"))
+        .collect();
+    assert_eq!(records.len(), 2, "intent + outcome: {log}");
+    assert_eq!(records[0]["kind"], "intent");
+    assert_eq!(records[0]["command"], "whoisguard.enable");
+    assert_eq!(records[0]["params"]["WhoisguardID"], "5924316");
+    assert!(
+        !log.contains("testkey"),
+        "journal must never contain the key"
+    );
+    assert_eq!(records[1]["kind"], "outcome");
+    assert_eq!(records[1]["ok"], true);
+    assert_eq!(records[0]["seq"], records[1]["seq"], "linkable pair");
+
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(dir.join("mutations.jsonl"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "journal is 0600");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn unwritable_journal_refuses_the_mutation_fail_closed() {
+    // Point the journal dir at a regular FILE so create_dir_all fails.
+    let bogus = std::env::temp_dir().join(format!("ncheap-journal-file-{}", std::process::id()));
+    std::fs::write(&bogus, b"not a dir").unwrap();
+    let transport = FakeTransport::new(vec![privacy_list_page_with("d1.example", "5924316")]);
+    let mut client = Client::new(transport, test_profile());
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client.set_journal_dir(Some(bogus.clone()));
+
+    let err = privacy::enable(&client, "d1.example", "ops@example.org").expect_err("refused");
+
+    assert_eq!(err.exit_code(), 3);
+    assert!(err.to_string().contains("journal"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "the resolution read happened; the mutation itself was never sent"
+    );
+    let _ = std::fs::remove_file(&bogus);
+}
+
+#[test]
+fn reads_are_not_journaled() {
+    let dir = journal_dir("reads");
+    let transport = FakeTransport::new(vec![privacy_list_page_with("d1.example", "1")]);
+    let mut client = Client::new(transport, test_profile());
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client.set_journal_dir(Some(dir.clone()));
+
+    privacy::list(&client).expect("list");
+
+    assert!(
+        !dir.join("mutations.jsonl").exists(),
+        "read-only commands leave no journal"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn lock_set_reads_pre_image_then_mutates() {
+    let status_inner =
+        r#"<DomainGetRegistrarLockResult Domain="d.example" RegistrarLockStatus="True" />"#;
+    let set_inner = r#"<DomainSetRegistrarLockResult Domain="d.example" IsSuccess="true" />"#;
+    let transport = FakeTransport::new(vec![
+        envelope("domains.getRegistrarLock", status_inner),
+        envelope("domains.setRegistrarLock", set_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = domains::set_lock(&client, "d.example", false).expect("unlock");
+
+    assert!(result.is_success);
+    assert!(!result.locked);
+    assert!(result.previously_locked, "pre-image captured");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        param(&requests[1], "Command"),
+        Some("namecheap.domains.setregistrarlock")
+    );
+    assert_eq!(param(&requests[1], "LockAction"), Some("UNLOCK"));
+}
+
+#[test]
+fn lock_set_is_gated_on_production_without_opt_in() {
+    let client = gate_client(FakeTransport::new(vec![]), false, false);
+    let err = domains::set_lock(&client, "d.example", true).expect_err("gated");
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(client.transport().requests.borrow().len(), 0);
 }

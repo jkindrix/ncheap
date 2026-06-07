@@ -42,7 +42,11 @@ file: `NCHEAP_API_USER`, `NCHEAP_API_KEY`, `NCHEAP_USERNAME`,
 (no config file) is supported.
 
 Namecheap's API requires the calling IP to be whitelisted (IPv4 only) under
-Profile → Tools → API Access in the Namecheap dashboard.
+Profile → Tools → API Access in the Namecheap dashboard. API access has
+eligibility requirements (at the time of writing: ≥20 domains, or ≥$50
+balance, or ≥$50 spent in the last 2 years). The sandbox is a separate
+account with separate data; its pricing and behavior are not guaranteed to
+match production.
 
 ## Usage
 
@@ -93,11 +97,18 @@ Every command with `--json` emits one envelope on stdout:
 ```
 
 `schema` identifies the envelope revision and `meta.version` the producing
-binary. All dates in envelope data are ISO-8601 (`YYYY-MM-DD`) — the API's
+binary. `command` is the dotted command name (`domains.list`,
+`domains.check`, `domains.lock`, `domains.info`, `domains.contacts`,
+`domains.register`, `domains.renew`, `dns.get`, `dns.set`, `privacy.list`,
+`privacy.enable`, `privacy.disable`, `account.balances`, `account.pricing`,
+`raw`) — or the sentinel `cli` when argument parsing itself failed. All dates in envelope data are ISO-8601 (`YYYY-MM-DD`) — the API's
 native `MM/DD/YYYY` strings sort wrong lexically; `raw` output remains a
 verbatim passthrough. The `registry_hold` field (formerly `is_locked`)
 reports the API's `IsLocked` — a registry/dispute hold, **not** the
-registrar transfer lock, which `domains lock` reports. On failure `ok` is `false` and `error` carries `kind`
+registrar transfer lock, which `domains lock` reports. (Upstream docs do
+not define this distinction; the interpretation is from observed live
+divergence between `getList.IsLocked` and `getRegistrarLock` on accounts
+whose domains are transfer-locked yet report `IsLocked=false`.) On failure `ok` is `false` and `error` carries `kind`
 (`usage|config|transport|api|parse|rate_limit`), `code` (Namecheap error
 number, if any), and `message`; `meta` is populated whenever a profile had
 resolved before the failure, so failures are attributable to a
@@ -124,7 +135,8 @@ renaming any of them is a breaking change and bumps the major version.
 Per-command `data` shapes follow the same rule. Note: if stdout closes
 mid-write (e.g. piping to `head`), ncheap exits 0 like standard tools —
 consumers should treat truncated JSON as incomplete output, not as a
-command result.
+command result. The success-path end-to-end test runs against debug builds
+(release builds can only reach the two Namecheap hosts, by design).
 
 ## Releasing
 
@@ -163,8 +175,12 @@ sustained agentic operation is at the account owner's risk.
   exceeds it — the pricing cache is never consulted for purchase decisions.
   Registration contacts are copied from an owned domain (`--contacts-from`);
   ncheap stores no contact data. Premium domains are refused. The actual
-  charge can exceed the listed price slightly (ICANN fees); both figures are
-  reported in the result.
+  charge can exceed the listed price slightly (ICANN fees); both figures
+  are reported, and `charged_exceeded_max_price` is set when the charge
+  came in above the cap. Early Access Phase (EAP) domains are refused like
+  premium ones. **There is no cumulative spend budget yet** — `--max-price`
+  is per-invocation; a looping caller is bounded only by the API rate
+  limits.
 - Mutating commands (`dns set`, `privacy enable/disable`, `domains
   register/renew`) are enforced at the client layer,
   not per-command: they are refused against production unless the profile
@@ -174,12 +190,11 @@ sustained agentic operation is at the account owner's risk.
   auto-retry — an ambiguous failure after a mutation surfaces instead of
   double-submitting. Sandbox profiles may always mutate.
 - Client-side throttling spaces requests ~3s apart **within one invocation**,
-  with backoff on HTTP 429/5xx. Namecheap's FAQ has stated the per-minute
-  key-wide limit as both 20/min and 50/min at different times (700/hour and
-  8000/day are consistent across sources); ncheap spaces for the
-  conservative reading. Concurrent ncheap processes do not coordinate: they
-  share one key budget, so avoid running many instances in parallel against
-  the same key.
+  with backoff on HTTP 429/5xx. Namecheap's FAQ documents 50/min (plus
+  700/hour and 8000/day) key-wide; older third-party reports say 20/min;
+  ncheap spaces for the conservative figure. Concurrent ncheap processes do
+  not coordinate: they share one key budget, so run at most 2 concurrent
+  processes per key until a cross-process budget exists.
 
 ## License
 

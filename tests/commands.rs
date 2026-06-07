@@ -778,8 +778,8 @@ fn privacy_enable_is_gated_on_production_without_opt_in() {
     assert_eq!(err.exit_code(), 3);
     assert_eq!(
         client.transport().requests.borrow().len(),
-        1,
-        "read allowed, mutation refused before transport"
+        0,
+        "gate fires before ANY traffic: no rate budget spent, no intent leaked"
     );
 }
 
@@ -939,8 +939,8 @@ fn register_is_gated_on_production_without_opt_in() {
     assert_eq!(err.exit_code(), 3);
     assert_eq!(
         client.transport().requests.borrow().len(),
-        3,
-        "reads allowed, the create itself refused before transport"
+        0,
+        "gate fires before ANY traffic: no rate budget spent, no intent leaked"
     );
 }
 
@@ -962,4 +962,101 @@ fn deeply_nested_xml_fails_or_parses_without_crashing() {
 
     // Any Result is acceptable; the assertion is "no crash".
     let _ = domains::list(&client);
+}
+
+// --- punch-list regression tests (F1, F3, F4, F18) ---
+
+#[test]
+fn drifted_create_response_fails_as_parse_not_false_negative() {
+    // A charge may have completed; a missing/renamed outcome attribute must
+    // surface as a parse error (reconcile-first), never "registered: false".
+    let drifted = r#"<DomainCreateResult Domain="newdomain.com" registered="true" ChargedAmount="14.18" DomainID="1" OrderID="2" TransactionID="3"/>"#;
+    let transport = FakeTransport::new(vec![
+        envelope(
+            "domains.check",
+            &check_available_inner("newdomain.com", false),
+        ),
+        envelope("users.getPricing", &pricing_com_inner("register", "11.28")),
+        envelope("domains.getContacts", &contacts_inner("owned.com")),
+        envelope("domains.create", drifted),
+    ]);
+    let client = test_client(transport);
+
+    let err = domains::register(&client, "newdomain.com", 1, 15.0, "owned.com")
+        .expect_err("drift must fail");
+    assert_eq!(err.kind(), "parse", "got: {err}");
+}
+
+#[test]
+fn price_guard_matches_action_category_not_first_duration_row() {
+    // Fixture carries REGISTER (11.28) before RENEW (14.98); a renew guard
+    // capped at 12 must see the RENEW price and refuse — matching the first
+    // duration row would wrongly approve.
+    let transport = FakeTransport::new(vec![envelope(
+        "users.getPricing",
+        pricing_inner(), // register 6.00/8.87 rows first, renew 9.99 after
+    )]);
+    let client = test_client(transport);
+
+    let err = domains::renew(&client, "owned.biz", 1, 8.0).expect_err("renew price is 9.99");
+    assert!(
+        err.to_string().contains("9.99"),
+        "guard must price against the RENEW row, not the first duration match: {err}"
+    );
+}
+
+#[test]
+fn register_refuses_eap_domains() {
+    let eap = r#"<DomainCheckResult Domain="eap.com" Available="true" ErrorNo="0" Description="" IsPremiumName="false" EapFee="220.0000"/>"#;
+    let transport = FakeTransport::new(vec![envelope("domains.check", eap)]);
+    let client = test_client(transport);
+
+    let err = domains::register(&client, "eap.com", 1, 15.0, "owned.com").expect_err("EAP");
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("Early Access"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "stops at check"
+    );
+}
+
+#[test]
+fn charge_exceeding_cap_sets_loud_flag() {
+    let create_inner = r#"<DomainCreateResult Domain="newdomain.com" Registered="true" ChargedAmount="15.43" DomainID="42" OrderID="7" TransactionID="9"/>"#;
+    let transport = FakeTransport::new(vec![
+        envelope(
+            "domains.check",
+            &check_available_inner("newdomain.com", false),
+        ),
+        envelope("users.getPricing", &pricing_com_inner("register", "11.28")),
+        envelope("domains.getContacts", &contacts_inner("owned.com")),
+        envelope("domains.create", create_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result =
+        domains::register(&client, "newdomain.com", 1, 15.0, "owned.com").expect("registers");
+    assert!(result.registered);
+    assert!(
+        result.charged_exceeded_max_price,
+        "15.43 charged > 15.00 cap must be flagged"
+    );
+}
+
+#[test]
+fn short_test_keys_are_not_mangled_by_redaction() {
+    use ncheap::api::TransportFailure;
+    let transport = FakeTransport::with_results(vec![
+        Err(TransportFailure::Other("failed to lookup address".into())),
+        Err(TransportFailure::Other("failed to lookup address".into())),
+    ]);
+    // test_profile key is "testkey" (7 chars, < 8): must not be substring-replaced
+    let client = test_client(transport);
+
+    let err = account::balances(&client).expect_err("transport error");
+    assert!(
+        err.to_string().contains("failed to lookup address"),
+        "short key must not mangle the message: {err}"
+    );
 }

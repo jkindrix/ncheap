@@ -129,6 +129,7 @@ pub fn enable<T: Transport>(
     domain: &str,
     forward_to: &str,
 ) -> Result<ToggleResult, Error> {
+    client.require_mutations_permitted()?;
     let id = resolve_id(client, domain)?;
     let body = client.call_mut(
         "whoisguard.enable",
@@ -148,6 +149,7 @@ pub fn enable<T: Transport>(
 
 /// Disable privacy (mutating).
 pub fn disable<T: Transport>(client: &Client<T>, domain: &str) -> Result<ToggleResult, Error> {
+    client.require_mutations_permitted()?;
     let id = resolve_id(client, domain)?;
     let body = client.call_mut("whoisguard.disable", &[("WhoisguardID", id.as_str())])?;
     let resp: DisableResponse = xml::parse(&body)?;

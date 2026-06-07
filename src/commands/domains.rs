@@ -568,15 +568,19 @@ pub struct CreateResponse {
 struct CreateXml {
     #[serde(rename = "@Domain", default)]
     domain: String,
-    #[serde(rename = "@Registered", deserialize_with = "de_bool", default)]
+    // Outcome fields deliberately have NO default: if the API drifts an
+    // attribute name, a charge-completed create must fail as a parse error
+    // (reconcile-first doctrine), never as a confident "registered: false"
+    // — the one answer that invites a double purchase.
+    #[serde(rename = "@Registered", deserialize_with = "de_bool")]
     registered: bool,
-    #[serde(rename = "@ChargedAmount", default)]
+    #[serde(rename = "@ChargedAmount")]
     charged_amount: String,
-    #[serde(rename = "@DomainID", default)]
+    #[serde(rename = "@DomainID")]
     domain_id: String,
-    #[serde(rename = "@OrderID", default)]
+    #[serde(rename = "@OrderID")]
     order_id: String,
-    #[serde(rename = "@TransactionID", default)]
+    #[serde(rename = "@TransactionID")]
     transaction_id: String,
 }
 
@@ -589,6 +593,10 @@ pub struct RegisterResult {
     pub listed_price: String,
     /// What Namecheap reports it actually charged.
     pub charged_amount: String,
+    /// True when the actual charge exceeded --max-price (ICANN fees or a
+    /// listed/billed divergence); the purchase already happened — this is
+    /// a loud flag, not a refusal.
+    pub charged_exceeded_max_price: bool,
     pub domain_id: String,
     pub order_id: String,
     pub transaction_id: String,
@@ -604,6 +612,7 @@ pub fn register<T: Transport>(
     max_price: f64,
     contacts_from: &str,
 ) -> Result<RegisterResult, Error> {
+    client.require_mutations_permitted()?;
     let domain = crate::domain::normalize(domain)?;
     let (_, tld) = crate::domain::split_sld_tld(&domain)?;
 
@@ -619,6 +628,19 @@ pub fn register<T: Transport>(
     if status.is_premium {
         return Err(Error::Usage(format!(
             "{domain} is a premium domain; ncheap does not register premium domains"
+        )));
+    }
+    // Early Access Phase fees can be hundreds of dollars on top of a listed
+    // price that passes the guard; fail closed like premium.
+    if status
+        .eap_fee
+        .parse::<f64>()
+        .map(|f| f > 0.0)
+        .unwrap_or(false)
+    {
+        return Err(Error::Usage(format!(
+            "{domain} carries an Early Access Phase fee ({}); ncheap does not register EAP domains",
+            status.eap_fee
         )));
     }
 
@@ -650,12 +672,14 @@ pub fn register<T: Transport>(
         .collect();
     let body = client.call_mut("domains.create", &param_refs)?;
     let resp: CreateResponse = xml::parse(&body)?;
+    let charged_exceeded_max_price = charge_exceeds(&resp.result.charged_amount, max_price);
     Ok(RegisterResult {
         domain: resp.result.domain,
         registered: resp.result.registered,
         years,
         listed_price: format!("{listed:.2}"),
         charged_amount: resp.result.charged_amount,
+        charged_exceeded_max_price,
         domain_id: resp.result.domain_id,
         order_id: resp.result.order_id,
         transaction_id: resp.result.transaction_id,
@@ -701,15 +725,16 @@ pub struct RenewResponse {
 struct RenewXml {
     #[serde(rename = "@DomainName", default)]
     domain_name: String,
-    #[serde(rename = "@Renew", deserialize_with = "de_bool", default)]
+    // No defaults on outcome fields — see CreateXml.
+    #[serde(rename = "@Renew", deserialize_with = "de_bool")]
     renew: bool,
-    #[serde(rename = "@ChargedAmount", default)]
+    #[serde(rename = "@ChargedAmount")]
     charged_amount: String,
-    #[serde(rename = "@DomainID", default)]
+    #[serde(rename = "@DomainID")]
     domain_id: String,
-    #[serde(rename = "@OrderID", default)]
+    #[serde(rename = "@OrderID")]
     order_id: String,
-    #[serde(rename = "@TransactionID", default)]
+    #[serde(rename = "@TransactionID")]
     transaction_id: String,
 }
 
@@ -720,9 +745,19 @@ pub struct RenewResult {
     pub years: u8,
     pub listed_price: String,
     pub charged_amount: String,
+    /// See RegisterResult: loud flag when the charge exceeded --max-price.
+    pub charged_exceeded_max_price: bool,
     pub domain_id: String,
     pub order_id: String,
     pub transaction_id: String,
+}
+
+/// True when the reported charge parses and exceeds the cap.
+fn charge_exceeds(charged: &str, max_price: f64) -> bool {
+    charged
+        .parse::<f64>()
+        .map(|c| c > max_price)
+        .unwrap_or(false)
 }
 
 /// Renew a domain (mutating, charges money). Live price guard, then call_mut.
@@ -732,6 +767,7 @@ pub fn renew<T: Transport>(
     years: u8,
     max_price: f64,
 ) -> Result<RenewResult, Error> {
+    client.require_mutations_permitted()?;
     let domain = crate::domain::normalize(domain)?;
     let (_, tld) = crate::domain::split_sld_tld(&domain)?;
 
@@ -751,12 +787,14 @@ pub fn renew<T: Transport>(
         ],
     )?;
     let resp: RenewResponse = xml::parse(&body)?;
+    let charged_exceeded_max_price = charge_exceeds(&resp.result.charged_amount, max_price);
     Ok(RenewResult {
         domain: resp.result.domain_name,
         renewed: resp.result.renew,
         years,
         listed_price: format!("{listed:.2}"),
         charged_amount: resp.result.charged_amount,
+        charged_exceeded_max_price,
         domain_id: resp.result.domain_id,
         order_id: resp.result.order_id,
         transaction_id: resp.result.transaction_id,

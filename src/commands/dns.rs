@@ -114,6 +114,7 @@ pub fn set<T: Transport>(
     domain: &str,
     nameservers: &[String],
 ) -> Result<SetResult, Error> {
+    client.require_mutations_permitted()?;
     let (sld, tld) = split_sld_tld(domain)?;
     let list = nameservers.join(",");
     let body = client.call_mut(

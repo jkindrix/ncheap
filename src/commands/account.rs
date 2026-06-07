@@ -247,13 +247,23 @@ fn read_cache(path: &Path) -> Option<Vec<PriceRow>> {
 }
 
 fn write_cache(path: &Path, rows: &[PriceRow]) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let Ok(body) = serde_json::to_string(rows) else {
         return;
     };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, body);
+    // 0600 like the config file: account-specific pricing is private data,
+    // and the cache should not be the one world-readable artifact.
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut f| f.write_all(body.as_bytes()));
 }
 
 pub fn render_pricing(rows: &[PriceRow]) {
@@ -285,9 +295,18 @@ pub fn live_price<T: Transport>(
         product: Some(tld.into()),
     };
     let (rows, _) = pricing(client, &query, None)?;
+    // Match category and product too: the server-side ActionName filter is
+    // not guaranteed to restrict the response (the docs' own example carries
+    // multiple categories), and the first duration-matching row could
+    // otherwise be the wrong action's price.
     let row = rows
         .iter()
-        .find(|r| r.duration == years.to_string() && r.duration_type.eq_ignore_ascii_case("YEAR"))
+        .find(|r| {
+            r.duration == years.to_string()
+                && r.duration_type.eq_ignore_ascii_case("YEAR")
+                && r.category.eq_ignore_ascii_case(action)
+                && r.product.eq_ignore_ascii_case(tld)
+        })
         .ok_or_else(|| {
             Error::Usage(format!(
                 "no {action} pricing found for .{tld} at {years} year(s); cannot price-guard the purchase"

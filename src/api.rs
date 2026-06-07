@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 use crate::config::Profile;
 
 /// Minimum spacing between API calls within this process. Namecheap's FAQ
-/// has been observed stating the per-minute key-wide limit as both 20/min
-/// and 50/min (700/hour and 8000/day are consistent across sources); 3100ms
-/// spaces for the conservative reading. Concurrent processes do not
-/// coordinate (a cross-process budget is planned, not built).
+/// documents 50/min key-wide (700/hour, 8000/day); older third-party
+/// reports say 20/min; 3100ms spaces for the conservative figure.
+/// Concurrent processes do not coordinate (a cross-process budget is
+/// planned, not built).
 const MIN_SPACING: Duration = Duration::from_millis(3100);
 /// Backoff before the single retry on HTTP 429/5xx. The API documents no
 /// rate-limit error shape, so this is conservative, not tuned.
@@ -161,6 +161,30 @@ impl Transport for HttpTransport {
     }
 }
 
+/// Replace the key (raw and percent-encoded) in an error string. Keys
+/// shorter than 8 chars are not replaced: real keys are 32-char hex, and
+/// substring-replacing a tiny test key only mangles unrelated words.
+fn redact(msg: &str, key: &str) -> String {
+    if key.len() < 8 {
+        return msg.to_owned();
+    }
+    let encoded: String = key
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    let out = msg.replace(key, "<redacted>");
+    if encoded != key {
+        return out.replace(&encoded, "<redacted>");
+    }
+    out
+}
+
 pub struct Client<T: Transport> {
     transport: T,
     profile: Profile,
@@ -217,11 +241,11 @@ impl<T: Transport> Client<T> {
         self.dispatch(&canonical, params, true)
     }
 
-    /// Issue one mutating API call. Never auto-retries (an ambiguous
-    /// failure after a mutation must surface, not double-submit), and is
-    /// gated: refused against production unless the profile explicitly
-    /// sets allow_production_mutations.
-    pub fn call_mut(&self, command: &str, params: &[(&str, &str)]) -> Result<String, Error> {
+    /// The production-mutation gate, callable by command implementations
+    /// BEFORE any preparatory reads: a refused mutation should spend no
+    /// rate budget and leak no intent to the wire. call_mut re-checks it
+    /// as defense in depth.
+    pub fn require_mutations_permitted(&self) -> Result<(), Error> {
         if !self.profile.sandbox && !self.profile.allow_production_mutations {
             return Err(Error::Policy(
                 "mutations against production are disabled; use a sandbox profile \
@@ -229,6 +253,15 @@ impl<T: Transport> Client<T> {
                     .into(),
             ));
         }
+        Ok(())
+    }
+
+    /// Issue one mutating API call. Never auto-retries (an ambiguous
+    /// failure after a mutation must surface, not double-submit), and is
+    /// gated: refused against production unless the profile explicitly
+    /// sets allow_production_mutations.
+    pub fn call_mut(&self, command: &str, params: &[(&str, &str)]) -> Result<String, Error> {
+        self.require_mutations_permitted()?;
         self.dispatch(&canonical_command(command), params, false)
     }
 
@@ -270,9 +303,10 @@ impl<T: Transport> Client<T> {
             }
             // Last-line defense: no error string leaves this layer containing
             // the key, regardless of what the HTTP library embeds.
-            Err(TransportFailure::Other(msg)) => Err(Error::Transport(
-                msg.replace(self.profile.api_key.expose(), "<redacted>"),
-            )),
+            Err(TransportFailure::Other(msg)) => Err(Error::Transport(redact(
+                &msg,
+                self.profile.api_key.expose(),
+            ))),
         }
     }
 

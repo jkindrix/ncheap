@@ -285,7 +285,7 @@ fn success_envelope_through_real_binary() {
     );
     let v: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON envelope");
     assert_eq!(v["ok"], true);
-    assert_eq!(v["schema"], 2);
+    assert_eq!(v["schema"], 3);
     assert_eq!(v["command"], "domains.check");
     assert_eq!(v["data"][0]["domain"], "zq9probe.com");
     assert_eq!(v["data"][0]["available"], true);

@@ -63,7 +63,8 @@ fn paginates_beyond_default_page_size() {
     assert_eq!(domains.len(), 24, "all 24 domains must survive pagination");
     assert_eq!(domains[0].name, "domain00.example");
     assert_eq!(domains[23].name, "domain23.example");
-    assert!(!domains[5].is_locked, "IsLocked=\"False\" must parse");
+    assert!(!domains[5].registry_hold, "IsLocked=\"False\" must parse");
+    assert_eq!(domains[0].expires, "2027-02-15", "dates are ISO-8601");
     assert_eq!(client.calls(), 2);
 }
 

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-07
+
+Envelope schema 3 — driven by first-consumer feedback from an AI agent.
+
+### Changed (breaking)
+
+- All dates in envelope data are normalized to ISO-8601 (`YYYY-MM-DD`);
+  the API's `MM/DD/YYYY` strings caused a real consumer to string-sort
+  expiry dates wrong. Unrecognized date formats pass through verbatim.
+  `raw` output is unaffected.
+- `is_locked` renamed to `registry_hold` (and the human table column
+  `LOCK` to `HOLD`): the field reports the API's registry/dispute hold,
+  not the registrar transfer lock, and the old name misled two
+  independent consumers. Transfer lock remains `domains lock`.
+
 ## [0.2.0] - 2026-06-06
 
 Phase 2: mutating commands, all behind a client-layer safety gate, plus
@@ -78,5 +93,6 @@ Initial release: the complete read-only command surface.
 - IDN (punycode) normalization and Public Suffix List-aware domain
   validation on all domain arguments
 
+[0.3.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.3.0
 [0.2.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.1.0

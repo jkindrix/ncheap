@@ -68,6 +68,34 @@ pub fn parse<T: DeserializeOwned>(body: &str) -> Result<T, Error> {
     }
 }
 
+/// Namecheap dates arrive as "MM/DD/YYYY" (sometimes single-digit fields,
+/// sometimes a trailing time) — a format agents string-sort wrong. Schema 3
+/// normalizes envelope dates to ISO-8601 (YYYY-MM-DD). Unrecognized values
+/// pass through verbatim: dates are display data, not safety data, so an
+/// odd format must not fail a whole listing.
+pub fn de_date<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(to_iso_date(&s))
+}
+
+pub fn to_iso_date(s: &str) -> String {
+    let date_part = s.split_whitespace().next().unwrap_or(s);
+    let parts: Vec<&str> = date_part.split('/').collect();
+    if parts.len() == 3
+        && let (Ok(m), Ok(d), Ok(y)) = (
+            parts[0].parse::<u32>(),
+            parts[1].parse::<u32>(),
+            parts[2].parse::<u32>(),
+        )
+        && (1..=12).contains(&m)
+        && (1..=31).contains(&d)
+        && y >= 1000
+    {
+        return format!("{y:04}-{m:02}-{d:02}");
+    }
+    s.to_owned()
+}
+
 /// Namecheap booleans arrive as text and are not consistently cased across
 /// methods ("false", "True"); parse case-insensitively.
 pub fn de_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
@@ -78,5 +106,24 @@ pub fn de_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
         other => Err(serde::de::Error::custom(format!(
             "expected boolean, got {other:?}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_iso_date;
+
+    #[test]
+    fn dates_normalize_to_iso_8601() {
+        assert_eq!(to_iso_date("08/20/2026"), "2026-08-20");
+        assert_eq!(to_iso_date("4/30/2021"), "2021-04-30");
+        assert_eq!(to_iso_date("4/30/2021 11:31:13 AM"), "2021-04-30");
+    }
+
+    #[test]
+    fn unrecognized_dates_pass_through_verbatim() {
+        for odd in ["", "2026-08-20", "13/40/2026", "soon", "1/2"] {
+            assert_eq!(to_iso_date(odd), odd, "must not mangle {odd:?}");
+        }
     }
 }

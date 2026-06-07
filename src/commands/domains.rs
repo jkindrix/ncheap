@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::api::xml::{self, de_bool};
+use crate::api::xml::{self, de_bool, de_date};
 use crate::api::{Client, Error, Transport};
 
 #[derive(Debug, Deserialize)]
@@ -31,20 +31,29 @@ pub struct Domain {
     pub name: String,
     #[serde(rename(deserialize = "@User", serialize = "user"))]
     pub user: String,
-    #[serde(rename(deserialize = "@Created", serialize = "created"))]
+    #[serde(
+        rename(deserialize = "@Created", serialize = "created"),
+        deserialize_with = "de_date"
+    )]
     pub created: String,
-    #[serde(rename(deserialize = "@Expires", serialize = "expires"))]
+    #[serde(
+        rename(deserialize = "@Expires", serialize = "expires"),
+        deserialize_with = "de_date"
+    )]
     pub expires: String,
     #[serde(
         rename(deserialize = "@IsExpired", serialize = "is_expired"),
         deserialize_with = "de_bool"
     )]
     pub is_expired: bool,
+    /// getList's IsLocked is a registry/dispute hold ("changes not
+    /// allowed"), NOT the registrar transfer lock (see `domains lock`).
+    /// Renamed in schema 3 after the old name misled two consumers.
     #[serde(
-        rename(deserialize = "@IsLocked", serialize = "is_locked"),
+        rename(deserialize = "@IsLocked", serialize = "registry_hold"),
         deserialize_with = "de_bool"
     )]
-    pub is_locked: bool,
+    pub registry_hold: bool,
     #[serde(
         rename(deserialize = "@AutoRenew", serialize = "auto_renew"),
         deserialize_with = "de_bool"
@@ -249,9 +258,9 @@ struct InfoXml {
 
 #[derive(Debug, Default, Deserialize)]
 struct InfoDetailsXml {
-    #[serde(rename = "CreatedDate", default)]
+    #[serde(rename = "CreatedDate", default, deserialize_with = "de_date")]
     created: String,
-    #[serde(rename = "ExpiredDate", default)]
+    #[serde(rename = "ExpiredDate", default, deserialize_with = "de_date")]
     expires: String,
 }
 
@@ -263,7 +272,7 @@ struct WhoisguardXml {
     enabled: String,
     #[serde(rename = "ID", default)]
     id: String,
-    #[serde(rename = "ExpiredDate", default)]
+    #[serde(rename = "ExpiredDate", default, deserialize_with = "de_date")]
     expires: String,
 }
 
@@ -534,14 +543,14 @@ pub fn render_lock(status: &LockStatus) {
 pub fn render_table(domains: &[Domain]) {
     println!(
         "{:<40} {:<12} {:<6} {:<6} {:<12} {:<7}",
-        "NAME", "EXPIRES", "LOCK", "RENEW", "PRIVACY", "OURDNS"
+        "NAME", "EXPIRES", "HOLD", "RENEW", "PRIVACY", "OURDNS"
     );
     for d in domains {
         println!(
             "{:<40} {:<12} {:<6} {:<6} {:<12} {:<7}",
             d.name,
             d.expires,
-            if d.is_locked { "yes" } else { "no" },
+            if d.registry_hold { "yes" } else { "no" },
             if d.auto_renew { "yes" } else { "no" },
             d.privacy,
             if d.is_our_dns { "yes" } else { "no" },

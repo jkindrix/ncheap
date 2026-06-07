@@ -6,8 +6,9 @@ use crate::config::Profile;
 
 /// Envelope schema version. v0.1.0 shipped an unversioned envelope
 /// (retroactively schema 1); schema 2 added this field, meta.version,
-/// meta on failures, and the parse error kind.
-pub const SCHEMA: u32 = 2;
+/// meta on failures, and the parse error kind; schema 3 normalized all
+/// dates to ISO-8601 and renamed is_locked to registry_hold.
+pub const SCHEMA: u32 = 3;
 
 fn meta(profile: &Profile, api_calls: u32) -> Value {
     json!({

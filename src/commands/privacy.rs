@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::api::xml::{self, de_bool};
+use crate::api::xml::{self, de_bool, de_date};
 use crate::api::{Client, Error, Transport};
 
 #[derive(Debug, Deserialize)]
@@ -32,9 +32,17 @@ pub struct PrivacySubscription {
         default
     )]
     pub domain_name: String,
-    #[serde(rename(deserialize = "@Created", serialize = "created"), default)]
+    #[serde(
+        rename(deserialize = "@Created", serialize = "created"),
+        default,
+        deserialize_with = "de_date"
+    )]
     pub created: String,
-    #[serde(rename(deserialize = "@Expires", serialize = "expires"), default)]
+    #[serde(
+        rename(deserialize = "@Expires", serialize = "expires"),
+        default,
+        deserialize_with = "de_date"
+    )]
     pub expires: String,
     #[serde(rename(deserialize = "@Status", serialize = "status"), default)]
     pub status: String,

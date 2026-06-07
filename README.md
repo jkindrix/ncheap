@@ -4,7 +4,8 @@ A command-line tool for the Namecheap registrar API, built for terminal use
 and AI-agent operability: structured `--json` output, meaningful exit codes,
 and non-interactive operation by default.
 
-**Status: early development.** Phase 1 (read-only commands) in progress.
+**Status: early development (0.x).** Full read-only surface plus gated
+mutating commands (DNS, privacy, register/renew) are implemented.
 
 ## Build
 
@@ -83,16 +84,20 @@ Every command with `--json` emits one envelope on stdout:
 ```json
 {
   "ok": true,
-  "schema": 2,
+  "schema": 3,
   "command": "domains.list",
   "data": [ ... ],
   "error": null,
-  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.2.0" }
+  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.3.0" }
 }
 ```
 
 `schema` identifies the envelope revision and `meta.version` the producing
-binary. On failure `ok` is `false` and `error` carries `kind`
+binary. All dates in envelope data are ISO-8601 (`YYYY-MM-DD`) — the API's
+native `MM/DD/YYYY` strings sort wrong lexically; `raw` output remains a
+verbatim passthrough. The `registry_hold` field (formerly `is_locked`)
+reports the API's `IsLocked` — a registry/dispute hold, **not** the
+registrar transfer lock, which `domains lock` reports. On failure `ok` is `false` and `error` carries `kind`
 (`usage|config|transport|api|parse|rate_limit`), `code` (Namecheap error
 number, if any), and `message`; `meta` is populated whenever a profile had
 resolved before the failure, so failures are attributable to a
@@ -127,7 +132,8 @@ Releases are automated by [dist](https://opensource.axo.dev/cargo-dist/):
 bump the version in `Cargo.toml`, update `CHANGELOG.md`, run
 `cargo update -p psl` (the embedded Public Suffix List snapshot is frozen
 into each binary at build time), commit, then tag `vX.Y.Z` and push the
-tag. CI builds the binaries, checksums, and installer.
+tag. CI builds the binaries, checksums, and installer. After tagging, run
+`cargo install --path . --locked` so the PATH binary tracks the release.
 
 ## Safety model
 

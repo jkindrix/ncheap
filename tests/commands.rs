@@ -197,7 +197,7 @@ fn info_parses_nested_structure() {
     assert_eq!(info.domain, "domain1.com");
     assert_eq!(info.status, "Ok");
     assert!(info.is_owner);
-    assert_eq!(info.expires, "09/05/2027");
+    assert_eq!(info.expires, "2027-09-05", "dates are ISO-8601");
     let privacy = info.privacy.expect("privacy block present");
     assert_eq!(privacy.enabled, "True");
     assert_eq!(privacy.id, "3655801");

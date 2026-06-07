@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-07
+
+The two largest user-facing features since 0.2.0.
+
+### Added
+
+- `audit` — every read-only safety check across the account as one
+  command (3 + 2N API calls): expiry horizon, auto-renew × balance
+  funding, expired/registry-hold states, transfer locks, privacy,
+  DNS posture, contact consistency. Findings ranked critical/warning/
+  info; findings are data (exit 0).
+- `dns add` / `dns remove` — host-record editing built on the
+  full-replace setHosts: complete zone pre-image journaled, EmailType
+  (mail routing) preserved across rewrites, duplicate adds and
+  empty-zone removals refused, MX requires --mx-pref. Concurrent edits
+  to one zone are last-writer-wins (documented).
+
 ## [0.6.0] - 2026-06-07
 
 Cross-process coordination and operator-safety polish.
@@ -172,6 +189,7 @@ Initial release: the complete read-only command surface.
 - IDN (punycode) normalization and Public Suffix List-aware domain
   validation on all domain arguments
 
+[0.7.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.7.0
 [0.6.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.4.0

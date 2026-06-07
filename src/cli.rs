@@ -81,6 +81,8 @@ impl Command {
             },
             Command::Dns { command } => match command {
                 DnsCommand::Get { .. } => "dns.get",
+                DnsCommand::Add { .. } => "dns.add",
+                DnsCommand::Remove { .. } => "dns.remove",
                 DnsCommand::Set { .. } => "dns.set",
             },
             Command::Privacy { command } => match command {
@@ -120,6 +122,44 @@ pub enum PrivacyCommand {
 pub enum DnsCommand {
     /// Show nameserver mode and host records for a domain
     Get { domain: String },
+    /// Add one host record (mutating; setHosts is a full-zone rewrite)
+    Add {
+        domain: String,
+        /// Record type: A, AAAA, ALIAS, CAA, CNAME, MX, MXE, NS, TXT, URL, URL301, FRAME
+        #[arg(long = "type")]
+        record_type: String,
+        /// Host name ("@" for the apex, "www", ...)
+        #[arg(long)]
+        name: String,
+        /// Record value (IP, hostname, text — per record type)
+        #[arg(long)]
+        address: String,
+        /// TTL in seconds (60–60000; API default 1800)
+        #[arg(long)]
+        ttl: Option<u32>,
+        /// MX preference (required for MX records)
+        #[arg(long)]
+        mx_pref: Option<u32>,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove matching host records (mutating; full-zone rewrite)
+    Remove {
+        domain: String,
+        /// Record type of the records to remove
+        #[arg(long = "type")]
+        record_type: String,
+        /// Host name of the records to remove
+        #[arg(long)]
+        name: String,
+        /// Only remove records with this exact value
+        #[arg(long)]
+        address: Option<String>,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Point a domain at custom nameservers (mutating)
     Set {
         domain: String,

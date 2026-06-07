@@ -326,6 +326,72 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
                 );
                 Ok(())
             }
+            DnsCommand::Add {
+                domain,
+                record_type,
+                name: host_name,
+                address,
+                ttl,
+                mx_pref,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!(
+                        "add {record_type} record {host_name} -> {address} on {domain} \
+                         (full-zone rewrite; concurrent edits are last-writer-wins)"
+                    ),
+                    *yes,
+                )?;
+                let result = commands::dns::add_record(
+                    client,
+                    domain,
+                    host_name,
+                    record_type,
+                    address,
+                    *ttl,
+                    *mx_pref,
+                )?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::dns::render_edit(&result),
+                );
+                Ok(())
+            }
+            DnsCommand::Remove {
+                domain,
+                record_type,
+                name: host_name,
+                address,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!(
+                        "remove {record_type} record(s) named {host_name} from {domain} \
+                         (full-zone rewrite; concurrent edits are last-writer-wins)"
+                    ),
+                    *yes,
+                )?;
+                let result = commands::dns::remove_record(
+                    client,
+                    domain,
+                    host_name,
+                    record_type,
+                    address.as_deref(),
+                )?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::dns::render_edit(&result),
+                );
+                Ok(())
+            }
             DnsCommand::Set {
                 domain,
                 nameservers,

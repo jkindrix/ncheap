@@ -65,6 +65,8 @@ ncheap domains lock example.com        # registrar (transfer) lock status
 ncheap domains lock example.com --lock     # mutating; also --unlock
 ncheap domains contacts example.com    # contacts; PII redacted unless --full
 ncheap dns get example.com             # nameserver mode + host records
+ncheap dns add example.com --type A --name www --address 192.0.2.1   # mutating
+ncheap dns remove example.com --type A --name www    # mutating
 ncheap dns set example.com ns1.host ns2.host   # mutating; see safety model
 ncheap privacy list                    # domain privacy subscriptions
 ncheap privacy enable example.com --forward-to you@example.org   # mutating
@@ -174,6 +176,13 @@ sustained agentic operation is at the account owner's risk.
   key supplied via `NCHEAP_API_KEY` is visible in `/proc/<pid>/environ` to
   same-user processes and may land in shell history; the 0600 config file
   is the preferred channel on shared or backed-up machines.
+- DNS record edits (`dns add`/`dns remove`) ride on setHosts, which is a
+  **full-zone replace with no upstream undo or compare-and-swap**: ncheap
+  fetches the zone, modifies it, and rewrites it whole, preserving the
+  domain's `EmailType` (mail routing) and journaling the complete
+  pre-image. Concurrent edits to one zone are last-writer-wins — do not
+  run parallel editors against the same domain. Removals that would
+  empty the zone are refused.
 - Every mutation is journaled to an append-only, 0600 JSONL file
   (`~/.local/state/ncheap/mutations.jsonl`): an fsync'd intent record
   before the request, an outcome record after, and pre-images (previous

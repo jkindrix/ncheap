@@ -28,12 +28,16 @@ pub struct GetHostsResponse {
 
 #[derive(Debug, Deserialize)]
 struct HostsXml {
+    /// setHosts requires EmailType on resend; dropping it can reset the
+    /// domain's mail configuration. Captured here for the rewrite.
+    #[serde(rename = "@EmailType", default)]
+    email_type: String,
     /// The docs show `<Host>`; the live API returns `<host>`.
     #[serde(rename = "Host", alias = "host", default)]
     hosts: Vec<HostRecord>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HostRecord {
     /// Docs disagree on the attribute casing (HostId vs HostID).
     #[serde(
@@ -199,4 +203,243 @@ pub fn render(info: &DnsInfo) {
         }
         None => crate::safe_println!("(host records not managed by Namecheap)"),
     }
+}
+
+/// Record types setHosts accepts (mirror doc, capture 2025-08-14).
+const RECORD_TYPES: &[&str] = &[
+    "A", "AAAA", "ALIAS", "CAA", "CNAME", "MX", "MXE", "NS", "TXT", "URL", "URL301", "FRAME",
+];
+
+#[derive(Debug, Serialize)]
+pub struct EditResult {
+    pub domain: String,
+    pub is_success: bool,
+    pub action: String,
+    pub records_before: usize,
+    pub records_after: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetHostsResponse {
+    #[serde(rename = "DomainDNSSetHostsResult")]
+    result: SetHostsXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetHostsXml {
+    #[serde(rename = "@Domain", default)]
+    domain: String,
+    // No default — drift fails as parse, like every mutation outcome.
+    #[serde(rename = "@IsSuccess", deserialize_with = "de_bool")]
+    is_success: bool,
+}
+
+fn fetch_zone<T: Transport>(
+    client: &Client<T>,
+    sld: &str,
+    tld: &str,
+) -> Result<(Vec<HostRecord>, String), Error> {
+    let body = client.call("domains.dns.getHosts", &[("SLD", sld), ("TLD", tld)])?;
+    let resp: GetHostsResponse = xml::parse(&body)?;
+    Ok((resp.result.hosts, resp.result.email_type))
+}
+
+/// setHosts is FULL REPLACE with no upstream undo or compare-and-swap:
+/// the journal note carries the complete pre-image, and concurrent edits
+/// are last-writer-wins (documented).
+#[allow(clippy::too_many_arguments)]
+fn write_zone<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    sld: &str,
+    tld: &str,
+    records: &[HostRecord],
+    email_type: &str,
+    action: &str,
+    pre: &[HostRecord],
+) -> Result<bool, Error> {
+    client.journal_note(
+        "dns.records",
+        serde_json::json!({
+            "domain": domain,
+            "action": action,
+            "email_type": email_type,
+            "previous_records": pre
+                .iter()
+                .map(|h| serde_json::json!({
+                    "name": h.name, "type": h.record_type, "address": h.address,
+                    "ttl": h.ttl, "mx_pref": h.mx_pref,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    );
+    let mut params: Vec<(String, String)> = vec![
+        ("SLD".into(), sld.to_owned()),
+        ("TLD".into(), tld.to_owned()),
+    ];
+    if !email_type.is_empty() {
+        params.push(("EmailType".into(), email_type.to_owned()));
+    }
+    for (i, r) in records.iter().enumerate() {
+        let n = i + 1;
+        params.push((format!("HostName{n}"), r.name.clone()));
+        params.push((format!("RecordType{n}"), r.record_type.clone()));
+        params.push((format!("Address{n}"), r.address.clone()));
+        if !r.ttl.is_empty() {
+            params.push((format!("TTL{n}"), r.ttl.clone()));
+        }
+        if r.record_type.eq_ignore_ascii_case("MX") && !r.mx_pref.is_empty() {
+            params.push((format!("MXPref{n}"), r.mx_pref.clone()));
+        }
+    }
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let body = client.call_mut("domains.dns.setHosts", &param_refs)?;
+    let resp: SetHostsResponse = xml::parse(&body)?;
+    let _ = resp.result.domain;
+    Ok(resp.result.is_success)
+}
+
+fn validate_type(record_type: &str) -> Result<String, Error> {
+    let upper = record_type.to_ascii_uppercase();
+    if !RECORD_TYPES.contains(&upper.as_str()) {
+        return Err(Error::Usage(format!(
+            "unknown record type {record_type:?}; supported: {}",
+            RECORD_TYPES.join(", ")
+        )));
+    }
+    Ok(upper)
+}
+
+/// Add one host record (mutating; full-zone rewrite under the hood).
+#[allow(clippy::too_many_arguments)]
+pub fn add_record<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    name: &str,
+    record_type: &str,
+    address: &str,
+    ttl: Option<u32>,
+    mx_pref: Option<u32>,
+) -> Result<EditResult, Error> {
+    client.require_mutations_permitted()?;
+    let record_type = validate_type(record_type)?;
+    if record_type == "MX" && mx_pref.is_none() {
+        return Err(Error::Usage(
+            "MX records require --mx-pref (the API mandates MXPref for MX)".into(),
+        ));
+    }
+    let (sld, tld) = split_sld_tld(domain)?;
+    let (mut records, email_type) = fetch_zone(client, &sld, &tld)?;
+    let before = records.len();
+    if records.iter().any(|r| {
+        r.name.eq_ignore_ascii_case(name)
+            && r.record_type.eq_ignore_ascii_case(&record_type)
+            && r.address == address
+    }) {
+        return Err(Error::Usage(format!(
+            "an identical {record_type} record for {name:?} already exists"
+        )));
+    }
+    let pre = records.clone();
+    records.push(HostRecord {
+        id: String::new(),
+        name: name.to_owned(),
+        record_type: record_type.clone(),
+        address: address.to_owned(),
+        mx_pref: mx_pref.map(|p| p.to_string()).unwrap_or_default(),
+        ttl: ttl.map(|t| t.to_string()).unwrap_or_default(),
+    });
+    let action = format!("add {record_type} {name} -> {address}");
+    let is_success = write_zone(
+        client,
+        domain,
+        &sld,
+        &tld,
+        &records,
+        &email_type,
+        &action,
+        &pre,
+    )?;
+    Ok(EditResult {
+        domain: domain.to_owned(),
+        is_success,
+        action,
+        records_before: before,
+        records_after: records.len(),
+    })
+}
+
+/// Remove matching host records (mutating; full-zone rewrite).
+pub fn remove_record<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    name: &str,
+    record_type: &str,
+    address: Option<&str>,
+) -> Result<EditResult, Error> {
+    client.require_mutations_permitted()?;
+    let record_type = validate_type(record_type)?;
+    let (sld, tld) = split_sld_tld(domain)?;
+    let (records, email_type) = fetch_zone(client, &sld, &tld)?;
+    let before = records.len();
+    let (matched, remaining): (Vec<HostRecord>, Vec<HostRecord>) =
+        records.into_iter().partition(|r| {
+            r.name.eq_ignore_ascii_case(name)
+                && r.record_type.eq_ignore_ascii_case(&record_type)
+                && address.is_none_or(|a| r.address == a)
+        });
+    if matched.is_empty() {
+        return Err(Error::Usage(format!(
+            "no {record_type} record for {name:?}{} found",
+            address
+                .map(|a| format!(" with address {a:?}"))
+                .unwrap_or_default()
+        )));
+    }
+    if remaining.is_empty() {
+        return Err(Error::Usage(
+            "removal would leave the zone empty; refusing (clear the zone via the dashboard if intended)"
+                .into(),
+        ));
+    }
+    let pre: Vec<HostRecord> = matched.iter().chain(remaining.iter()).cloned().collect();
+    let action = format!(
+        "remove {} {record_type} record(s) for {name}",
+        matched.len()
+    );
+    let is_success = write_zone(
+        client,
+        domain,
+        &sld,
+        &tld,
+        &remaining,
+        &email_type,
+        &action,
+        &pre,
+    )?;
+    Ok(EditResult {
+        domain: domain.to_owned(),
+        is_success,
+        action,
+        records_before: before,
+        records_after: remaining.len(),
+    })
+}
+
+pub fn render_edit(result: &EditResult) {
+    crate::safe_println!(
+        "{}: {} ({}; records {} -> {})",
+        result.domain,
+        result.action,
+        if result.is_success {
+            "success"
+        } else {
+            "NOT successful"
+        },
+        result.records_before,
+        result.records_after,
+    );
 }

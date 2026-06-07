@@ -1491,3 +1491,135 @@ fn audit_surfaces_expiry_funding_lock_and_consistency_findings() {
     assert_eq!(report.summary.critical, 2);
     assert_eq!(report.summary.api_calls, 7, "3 + 2N for N=2");
 }
+
+// --- dns add / remove (full-zone rewrite) ---
+
+fn zone_fixture(email_type: &str) -> String {
+    envelope(
+        "domains.dns.getHosts",
+        &format!(
+            r#"<DomainDNSGetHostsResult Domain="d.com" EmailType="{email_type}" IsUsingOurDNS="true">
+  <host HostId="1" Name="www" Type="CNAME" Address="parked.example." MXPref="10" TTL="1800" />
+  <host HostId="2" Name="@" Type="URL" Address="https://parked.example/" MXPref="10" TTL="1800" />
+</DomainDNSGetHostsResult>"#
+        ),
+    )
+}
+
+fn sethosts_ok() -> String {
+    envelope(
+        "domains.dns.setHosts",
+        r#"<DomainDNSSetHostsResult Domain="d.com" IsSuccess="true" />"#,
+    )
+}
+
+#[test]
+fn dns_add_rewrites_full_zone_preserving_email_type() {
+    let transport = FakeTransport::new(vec![zone_fixture("FWD"), sethosts_ok()]);
+    let client = test_client(transport);
+
+    let result =
+        dns::add_record(&client, "d.com", "api", "A", "192.0.2.9", Some(300), None).expect("add");
+
+    assert!(result.is_success);
+    assert_eq!(result.records_before, 2);
+    assert_eq!(result.records_after, 3);
+    let requests = client.transport().requests.borrow();
+    let set = &requests[1];
+    assert_eq!(
+        param(set, "Command"),
+        Some("namecheap.domains.dns.sethosts")
+    );
+    assert_eq!(
+        param(set, "EmailType"),
+        Some("FWD"),
+        "EmailType must be resent or mail routing resets"
+    );
+    // existing records resent + the new one appended
+    assert_eq!(param(set, "HostName1"), Some("www"));
+    assert_eq!(param(set, "RecordType1"), Some("CNAME"));
+    assert_eq!(param(set, "HostName2"), Some("@"));
+    assert_eq!(param(set, "HostName3"), Some("api"));
+    assert_eq!(param(set, "RecordType3"), Some("A"));
+    assert_eq!(param(set, "Address3"), Some("192.0.2.9"));
+    assert_eq!(param(set, "TTL3"), Some("300"));
+    assert_eq!(param(set, "MXPref3"), None, "MXPref only for MX records");
+}
+
+#[test]
+fn dns_add_refuses_duplicates_mx_without_pref_and_bad_types() {
+    // duplicate
+    let transport = FakeTransport::new(vec![zone_fixture("FWD")]);
+    let client = test_client(transport);
+    let err = dns::add_record(
+        &client,
+        "d.com",
+        "www",
+        "CNAME",
+        "parked.example.",
+        None,
+        None,
+    )
+    .expect_err("duplicate");
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("already exists"));
+
+    // MX without --mx-pref: refused before any call
+    let client = test_client(FakeTransport::new(vec![]));
+    let err = dns::add_record(&client, "d.com", "@", "MX", "mail.example.", None, None)
+        .expect_err("mx pref");
+    assert!(err.to_string().contains("--mx-pref"));
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+
+    // unknown type: refused before any call
+    let client = test_client(FakeTransport::new(vec![]));
+    let err =
+        dns::add_record(&client, "d.com", "@", "BOGUS", "x", None, None).expect_err("bad type");
+    assert!(err.to_string().contains("unknown record type"));
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+#[test]
+fn dns_remove_filters_matches_and_guards_empty_zone() {
+    // happy: remove the CNAME, URL record remains
+    let transport = FakeTransport::new(vec![zone_fixture("FWD"), sethosts_ok()]);
+    let client = test_client(transport);
+    let result = dns::remove_record(&client, "d.com", "www", "CNAME", None).expect("remove");
+    assert!(result.is_success);
+    assert_eq!(result.records_before, 2);
+    assert_eq!(result.records_after, 1);
+    let requests = client.transport().requests.borrow();
+    let set = &requests[1];
+    assert_eq!(
+        param(set, "HostName1"),
+        Some("@"),
+        "only the URL record resent"
+    );
+    assert_eq!(param(set, "HostName2"), None);
+
+    // no match
+    let client = test_client(FakeTransport::new(vec![zone_fixture("FWD")]));
+    let err = dns::remove_record(&client, "d.com", "nope", "A", None).expect_err("no match");
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("no A record"));
+
+    // refusing to empty the zone: removing both records' worth via type+name
+    let one_record = envelope(
+        "domains.dns.getHosts",
+        r#"<DomainDNSGetHostsResult Domain="d.com" EmailType="FWD" IsUsingOurDNS="true">
+  <host HostId="1" Name="www" Type="CNAME" Address="parked.example." MXPref="10" TTL="1800" />
+</DomainDNSGetHostsResult>"#,
+    );
+    let client = test_client(FakeTransport::new(vec![one_record]));
+    let err = dns::remove_record(&client, "d.com", "www", "CNAME", None).expect_err("empty");
+    assert!(err.to_string().contains("zone empty"));
+}
+
+#[test]
+fn dns_record_edits_are_gated_on_production_without_opt_in() {
+    let client = gate_client(FakeTransport::new(vec![]), false, false);
+    let err =
+        dns::add_record(&client, "d.com", "a", "A", "192.0.2.1", None, None).expect_err("gated");
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}

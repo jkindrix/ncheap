@@ -185,9 +185,11 @@ sustained agentic operation is at the account owner's risk.
   charge can exceed the listed price slightly (ICANN fees); both figures
   are reported, and `charged_exceeded_max_price` is set when the charge
   came in above the cap. Early Access Phase (EAP) domains are refused like
-  premium ones. **There is no cumulative spend budget yet** — `--max-price`
-  is per-invocation; a looping caller is bounded only by the API rate
-  limits.
+  premium ones. A rolling-24h budget (`max_daily_spend` in the profile,
+  config-file-only like the gate) bounds cumulative purchases via a local
+  0600 ledger; **production purchases are refused entirely until a cap is
+  set**, so arming the mutation gate never exposes unlimited spend.
+  Sandbox is unlimited when uncapped.
 - Mutating commands (`dns set`, `privacy enable/disable`, `domains
   register/renew`) are enforced at the client layer,
   not per-command: they are refused against production unless the profile

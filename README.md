@@ -57,6 +57,7 @@ match production.
 ## Usage
 
 ```
+ncheap audit                           # every safety check, one report
 ncheap domains list                    # all domains, auto-paginated
 ncheap domains check example.com ...   # availability (up to 50 per call)
 ncheap domains info example.com        # registration, privacy, DNS details

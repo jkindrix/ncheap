@@ -1415,3 +1415,79 @@ fn cross_process_throttle_spaces_two_clients_sharing_state() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// --- audit command ---
+
+#[test]
+fn audit_surfaces_expiry_funding_lock_and_consistency_findings() {
+    // Two domains: one healthy, one expiring in 20 days with auto-renew on,
+    // against a balance that cannot fund it; the expiring one also has its
+    // transfer lock off. today = 2026-06-07.
+    let today = 20611; // days since epoch for 2026-06-07
+    let list_inner = r#"<DomainGetListResult>
+<Domain ID="1" Name="healthy.example" User="u" Created="01/01/2024" Expires="01/01/2028" IsExpired="false" IsLocked="false" AutoRenew="true" WhoisGuard="ENABLED" IsPremium="false" IsOurDNS="true"/>
+<Domain ID="2" Name="atrisk.example" User="u" Created="01/01/2024" Expires="06/27/2026" IsExpired="false" IsLocked="false" AutoRenew="true" WhoisGuard="ENABLED" IsPremium="false" IsOurDNS="false"/>
+</DomainGetListResult>
+<Paging><TotalItems>2</TotalItems><CurrentPage>1</CurrentPage><PageSize>100</PageSize></Paging>"#;
+    let balances_inner = r#"<UserGetBalancesResult Currency="USD" AvailableBalance="5.00" AccountBalance="5.00" EarnedAmount="0.00" WithdrawableAmount="0.00" FundsRequiredForAutoRenew="27.14" />"#;
+    let privacy_inner = r#"<WhoisguardGetListResult>
+<Whoisguard ID="1" DomainName="healthy.example" Created="01/01/2024" Expires="01/01/2028" Status="ENABLED" />
+<Whoisguard ID="2" DomainName="atrisk.example" Created="01/01/2024" Expires="06/27/2026" Status="ENABLED" />
+</WhoisguardGetListResult>
+<Paging><TotalItems>2</TotalItems><CurrentPage>1</CurrentPage><PageSize>100</PageSize></Paging>"#;
+    let lock_on = |d: &str| {
+        envelope(
+            "domains.getRegistrarLock",
+            &format!(r#"<DomainGetRegistrarLockResult Domain="{d}" RegistrarLockStatus="True" />"#),
+        )
+    };
+    let lock_off = |d: &str| {
+        envelope(
+            "domains.getRegistrarLock",
+            &format!(
+                r#"<DomainGetRegistrarLockResult Domain="{d}" RegistrarLockStatus="False" />"#
+            ),
+        )
+    };
+    let contacts_ok = |d: &str| envelope("domains.getContacts", &contacts_inner(d));
+
+    let transport = FakeTransport::new(vec![
+        envelope("domains.getList", list_inner),
+        envelope("users.getBalances", balances_inner),
+        envelope("whoisguard.getList", privacy_inner),
+        lock_on("healthy.example"),
+        contacts_ok("healthy.example"),
+        lock_off("atrisk.example"),
+        contacts_ok("atrisk.example"),
+    ]);
+    let client = test_client(transport);
+
+    let report = ncheap::commands::audit::run(&client, today).expect("audit");
+
+    let has = |sev: &str, check: &str, dom: Option<&str>| {
+        report
+            .findings
+            .iter()
+            .any(|f| f.severity == sev && f.check == check && f.domain.as_deref() == dom)
+    };
+    assert!(
+        has("critical", "balance_covers_auto_renew", None),
+        "underfunded auto-renew with an at-risk domain is critical: {report:?}"
+    );
+    assert!(
+        has("critical", "expiry_horizon", Some("atrisk.example")),
+        "20 days out is critical"
+    );
+    assert!(has("warning", "transfer_lock", Some("atrisk.example")));
+    assert!(has("info", "dns_posture", Some("atrisk.example")));
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.domain.as_deref() == Some("healthy.example") && f.severity != "info"),
+        "healthy domain has no critical/warning findings: {report:?}"
+    );
+    assert_eq!(report.summary.domains, 2);
+    assert_eq!(report.summary.critical, 2);
+    assert_eq!(report.summary.api_calls, 7, "3 + 2N for N=2");
+}

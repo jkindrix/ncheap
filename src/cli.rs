@@ -22,6 +22,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Run every read-only safety check across the account (3 + 2N API calls)
+    Audit,
     /// Domain operations
     Domains {
         #[command(subcommand)]
@@ -57,6 +59,7 @@ impl Command {
     /// truth so main's error path and success path cannot drift apart.
     pub fn name(&self) -> &'static str {
         match self {
+            Command::Audit => "audit",
             Command::Domains { command } => match command {
                 DomainsCommand::List => "domains.list",
                 DomainsCommand::Check { .. } => "domains.check",

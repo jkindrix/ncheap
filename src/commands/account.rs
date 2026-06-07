@@ -50,7 +50,7 @@ pub fn redacted_view(b: &Balances) -> serde_json::Value {
 }
 
 /// None when an amount fails to parse (shape is undocumented for all locales).
-fn covers_auto_renew(b: &Balances) -> Option<bool> {
+pub fn covers_auto_renew(b: &Balances) -> Option<bool> {
     let available: f64 = b.available_balance.parse().ok()?;
     let required: f64 = b.funds_required_for_auto_renew.parse().ok()?;
     Some(available >= required)

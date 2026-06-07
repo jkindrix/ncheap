@@ -102,6 +102,18 @@ fn confirm_mutation(description: &str, yes: bool) -> Result<(), ncheap::api::Err
 fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Error> {
     let name = cli.command.name();
     match &cli.command {
+        Command::Audit => {
+            let report = commands::audit::run(client, commands::audit::today_days())?;
+            output::success(
+                cli.json,
+                name,
+                &report,
+                client.profile(),
+                client.calls(),
+                || commands::audit::render(&report),
+            );
+            Ok(())
+        }
         Command::Domains { command } => match command {
             DomainsCommand::List => {
                 let domains = commands::domains::list(client)?;

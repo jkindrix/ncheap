@@ -1194,3 +1194,141 @@ fn lock_set_is_gated_on_production_without_opt_in() {
     assert_eq!(err.exit_code(), 3);
     assert_eq!(client.transport().requests.borrow().len(), 0);
 }
+
+// --- daily spend cap ---
+
+fn spend_client(
+    transport: FakeTransport,
+    sandbox: bool,
+    cap: Option<f64>,
+    dir: &std::path::Path,
+) -> Client<FakeTransport> {
+    let mut profile = test_profile();
+    profile.sandbox = sandbox;
+    profile.allow_production_mutations = !sandbox; // armed when production
+    profile.max_daily_spend = cap;
+    let mut client = Client::new(transport, profile);
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client.set_journal_dir(Some(dir.to_path_buf()));
+    client
+}
+
+fn renew_fixtures() -> Vec<String> {
+    vec![
+        envelope("users.getPricing", &pricing_com_inner("renew", "14.98")),
+        envelope(
+            "domains.renew",
+            r#"<DomainRenewResult DomainName="owned.com" DomainID="42" Renew="true" OrderID="7" TransactionID="9" ChargedAmount="14.98"/>"#,
+        ),
+    ]
+}
+
+#[test]
+fn production_purchase_without_cap_is_refused() {
+    let dir = journal_dir("nocap");
+    let transport = FakeTransport::new(vec![envelope(
+        "users.getPricing",
+        &pricing_com_inner("renew", "14.98"),
+    )]);
+    let client = spend_client(transport, false, None, &dir);
+
+    let err = domains::renew(&client, "owned.com", 1, 20.0).expect_err("no cap, no purchase");
+
+    assert_eq!(err.exit_code(), 3);
+    assert!(err.to_string().contains("max_daily_spend"));
+    assert_eq!(
+        client.transport().requests.borrow().len(),
+        1,
+        "price read happened; the renew itself was never sent"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn spend_cap_accumulates_and_refuses_when_exceeded() {
+    let dir = journal_dir("cap");
+    // First renew: 14.98 against a 20.00 cap — proceeds.
+    let client = spend_client(
+        FakeTransport::new(renew_fixtures()),
+        false,
+        Some(20.0),
+        &dir,
+    );
+    domains::renew(&client, "owned.com", 1, 20.0).expect("first renew under cap");
+    let ledger = std::fs::read_to_string(dir.join("spend.jsonl")).expect("ledger");
+    assert_eq!(ledger.lines().count(), 1);
+
+    // Second renew: 14.98 + 14.98 > 20.00 — refused before the mutation.
+    let client = spend_client(
+        FakeTransport::new(vec![envelope(
+            "users.getPricing",
+            &pricing_com_inner("renew", "14.98"),
+        )]),
+        false,
+        Some(20.0),
+        &dir,
+    );
+    let err = domains::renew(&client, "owned.com", 1, 20.0).expect_err("over cap");
+    assert_eq!(err.exit_code(), 3);
+    assert!(err.to_string().contains("daily spend cap"), "{err}");
+    assert_eq!(client.transport().requests.borrow().len(), 1);
+
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(dir.join("spend.jsonl"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "ledger is 0600");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn spend_records_older_than_24h_and_other_profiles_do_not_count() {
+    let dir = journal_dir("window");
+    std::fs::create_dir_all(&dir).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let stale = now - 25 * 60 * 60;
+    std::fs::write(
+        dir.join("spend.jsonl"),
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"ts": stale, "profile": "test", "sandbox": false, "command": "domains.renew", "domain": "old.com", "amount": 100.0}),
+            serde_json::json!({"ts": now, "profile": "other", "sandbox": false, "command": "domains.renew", "domain": "other.com", "amount": 100.0}),
+        ),
+    )
+    .unwrap();
+
+    let client = spend_client(
+        FakeTransport::new(renew_fixtures()),
+        false,
+        Some(20.0),
+        &dir,
+    );
+    domains::renew(&client, "owned.com", 1, 20.0)
+        .expect("stale and foreign records must not consume the budget");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn corrupt_spend_ledger_refuses_purchases() {
+    let dir = journal_dir("corrupt");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("spend.jsonl"), "not json\n").unwrap();
+
+    let client = spend_client(
+        FakeTransport::new(vec![envelope(
+            "users.getPricing",
+            &pricing_com_inner("renew", "14.98"),
+        )]),
+        false,
+        Some(20.0),
+        &dir,
+    );
+    let err = domains::renew(&client, "owned.com", 1, 20.0).expect_err("corrupt ledger");
+    assert_eq!(err.exit_code(), 3);
+    assert!(err.to_string().contains("ledger"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

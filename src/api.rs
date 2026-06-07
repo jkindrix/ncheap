@@ -288,6 +288,106 @@ impl<T: Transport> Client<T> {
         result
     }
 
+    /// Reserve purchase budget against the rolling-24h ledger. Fail-closed
+    /// throughout: production with no cap configured refuses purchases
+    /// outright (arming the mutation gate must never expose unlimited
+    /// spend); a cap with no usable ledger refuses; ledger read/write
+    /// errors refuse. Records the LISTED price at reservation time —
+    /// conservative, since the listed price is what the guard approved.
+    pub fn reserve_spend(&self, amount: f64, command: &str, domain: &str) -> Result<(), Error> {
+        let cap = match self.profile.max_daily_spend {
+            Some(cap) => cap,
+            None if self.profile.sandbox => {
+                // Unlimited fake money, but still recorded for parity.
+                if self.journal_dir.is_some() {
+                    self.append_spend(amount, command, domain)?;
+                }
+                return Ok(());
+            }
+            None => {
+                return Err(Error::Policy(
+                    "purchases against production require max_daily_spend in the profile".into(),
+                ));
+            }
+        };
+        if self.journal_dir.is_none() {
+            return Err(Error::Policy(
+                "max_daily_spend is set but no state directory is available to track it".into(),
+            ));
+        }
+        let spent = self.spend_last_24h().map_err(|e| {
+            Error::Policy(format!(
+                "cannot read the spend ledger ({e}); refusing to purchase"
+            ))
+        })?;
+        if spent + amount > cap {
+            return Err(Error::Policy(format!(
+                "daily spend cap would be exceeded: {spent:.2} spent in the last 24h \
+                 + {amount:.2} requested > max_daily_spend {cap:.2}"
+            )));
+        }
+        self.append_spend(amount, command, domain)
+    }
+
+    fn append_spend(&self, amount: f64, command: &str, domain: &str) -> Result<(), Error> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let Some(dir) = &self.journal_dir else {
+            return Ok(());
+        };
+        let write = || -> std::io::Result<()> {
+            std::fs::create_dir_all(dir)?;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .mode(0o600)
+                .open(dir.join("spend.jsonl"))?;
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "ts": unix_now(),
+                    "profile": self.profile.name,
+                    "sandbox": self.profile.sandbox,
+                    "command": command,
+                    "domain": domain,
+                    "amount": amount,
+                })
+            )?;
+            file.sync_all()
+        };
+        write().map_err(|e| {
+            Error::Policy(format!(
+                "cannot record the spend reservation ({e}); refusing to purchase"
+            ))
+        })
+    }
+
+    /// Sum of reservations for THIS profile in the trailing 24 hours.
+    fn spend_last_24h(&self) -> std::io::Result<f64> {
+        let Some(dir) = &self.journal_dir else {
+            return Ok(0.0);
+        };
+        let path = dir.join("spend.jsonl");
+        if !path.exists() {
+            return Ok(0.0);
+        }
+        let cutoff = unix_now().saturating_sub(24 * 60 * 60);
+        let mut total = 0.0;
+        for line in std::fs::read_to_string(&path)?.lines() {
+            let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else {
+                // A corrupt ledger must not silently under-count: refuse.
+                return Err(std::io::Error::other("corrupt spend ledger line"));
+            };
+            let ts = rec["ts"].as_u64().unwrap_or(0);
+            let same_profile = rec["profile"].as_str() == Some(self.profile.name.as_str());
+            if ts >= cutoff && same_profile {
+                total += rec["amount"].as_f64().unwrap_or(0.0);
+            }
+        }
+        Ok(total)
+    }
+
     /// Best-effort context record (e.g. a pre-image) ahead of a mutation.
     pub fn journal_note(&self, command: &str, data: serde_json::Value) {
         let _ = self.journal_append(

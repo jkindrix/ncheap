@@ -62,6 +62,7 @@ pub struct ProfileFile {
     pub client_ip: Option<String>,
     pub sandbox: Option<bool>,
     pub allow_production_mutations: Option<bool>,
+    pub max_daily_spend: Option<f64>,
 }
 
 /// Fully resolved credentials for one environment.
@@ -76,6 +77,11 @@ pub struct Profile {
     /// Mutating API calls against production are refused unless this is
     /// explicitly set (sandbox profiles may always mutate).
     pub allow_production_mutations: bool,
+    /// Rolling-24h purchase budget. Config-file-only (no env override,
+    /// same injection reasoning as the mutation gate). Production
+    /// purchases are refused entirely when unset; sandbox is unlimited
+    /// when unset.
+    pub max_daily_spend: Option<f64>,
     /// Debug builds only: NCHEAP_ENDPOINT redirects the API endpoint so an
     /// E2E test can prove the success envelope through the real binary.
     /// Compiled out of release builds — the two Namecheap hosts are the
@@ -164,6 +170,9 @@ pub fn resolve(
     // injection-prone channel an agent has, and this flag arms production
     // mutations. The 0600-protected config file is the only switch.
     let allow_production_mutations = base.allow_production_mutations.unwrap_or(false);
+    // Config-file-only like the gate: env must not be able to raise a
+    // spend budget.
+    let max_daily_spend = base.max_daily_spend;
     let api_user = env("NCHEAP_API_USER").or(base.api_user);
     // An empty key is missing, not present: "" would also turn the
     // key-redaction replace into string mangling.
@@ -210,6 +219,7 @@ pub fn resolve(
         client_ip: client_ip.expect("checked above"),
         sandbox,
         allow_production_mutations,
+        max_daily_spend,
         endpoint_override,
     })
 }

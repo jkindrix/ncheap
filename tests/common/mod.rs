@@ -46,6 +46,7 @@ pub fn test_profile() -> Profile {
         client_ip: "192.0.2.1".into(),
         sandbox: true,
         allow_production_mutations: false,
+        max_daily_spend: None,
         endpoint_override: None,
     }
 }

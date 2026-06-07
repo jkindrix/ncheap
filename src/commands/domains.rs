@@ -748,6 +748,7 @@ pub fn register<T: Transport>(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
+    client.reserve_spend(listed, "domains.create", &domain)?;
     let body = client.call_mut("domains.create", &param_refs)?;
     let resp: CreateResponse = xml::parse(&body)?;
     let charged_exceeded_max_price = charge_exceeds(&resp.result.charged_amount, max_price);
@@ -856,6 +857,7 @@ pub fn renew<T: Transport>(
         )));
     }
 
+    client.reserve_spend(listed, "domains.renew", &domain)?;
     let years_str = years.to_string();
     let body = client.call_mut(
         "domains.renew",

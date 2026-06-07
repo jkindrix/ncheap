@@ -2,7 +2,7 @@ mod common;
 
 use common::{FakeTransport, param, test_client, test_profile};
 use ncheap::api::Client;
-use ncheap::commands::{account, dns, domains, privacy, raw};
+use ncheap::commands::{account, dns, domains, privacy, raw, transfer};
 
 fn envelope(command: &str, inner: &str) -> String {
     format!(
@@ -1622,4 +1622,136 @@ fn dns_record_edits_are_gated_on_production_without_opt_in() {
         dns::add_record(&client, "d.com", "a", "A", "192.0.2.1", None, None).expect_err("gated");
     assert_eq!(err.exit_code(), 3);
     assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+// --- set-default, contacts set-from, transfers ---
+
+#[test]
+fn dns_set_default_journals_pre_image_then_reverts() {
+    let list_inner = r#"
+<DomainDNSGetListResult Domain="d.com" IsUsingOurDNS="false">
+  <Nameserver>ns1.external.example</Nameserver>
+  <Nameserver>ns2.external.example</Nameserver>
+</DomainDNSGetListResult>"#;
+    let set_inner = r#"<DomainDNSSetDefaultResult Domain="d.com" Updated="true" />"#;
+    let transport = FakeTransport::new(vec![
+        envelope("domains.dns.getList", list_inner),
+        envelope("domains.dns.setDefault", set_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = dns::set_default(&client, "d.com").expect("set default");
+
+    assert!(result.updated);
+    assert_eq!(
+        result.previous_nameservers,
+        ["ns1.external.example", "ns2.external.example"]
+    );
+    let requests = client.transport().requests.borrow();
+    assert_eq!(
+        param(&requests[1], "Command"),
+        Some("namecheap.domains.dns.setdefault")
+    );
+}
+
+#[test]
+fn contacts_set_from_copies_source_blocks_through_mutation_path() {
+    let target_contacts = envelope("domains.getContacts", &contacts_inner("target.com"));
+    let source = contacts_inner("source.com").replace("John", "Jane");
+    let source_contacts = envelope("domains.getContacts", &source);
+    let set_ok = envelope(
+        "domains.setContacts",
+        r#"<DomainSetContactResult Domain="target.com" IsSuccess="true" />"#,
+    );
+    let transport = FakeTransport::new(vec![target_contacts, source_contacts, set_ok]);
+    let client = test_client(transport);
+
+    let result =
+        domains::set_contacts_from(&client, "target.com", "source.com").expect("set contacts");
+
+    assert!(result.is_success);
+    assert_eq!(result.copied_from, "source.com");
+    let requests = client.transport().requests.borrow();
+    assert_eq!(requests.len(), 3, "target pre-image, source read, mutation");
+    let set = &requests[2];
+    assert_eq!(param(set, "Command"), Some("namecheap.domains.setcontacts"));
+    assert_eq!(param(set, "DomainName"), Some("target.com"));
+    assert_eq!(param(set, "RegistrantFirstName"), Some("Jane"));
+    assert_eq!(param(set, "AuxBillingLastName"), Some("Smith"));
+}
+
+#[test]
+fn contacts_set_from_is_gated_before_any_read() {
+    let client = gate_client(FakeTransport::new(vec![]), false, false);
+    let err = domains::set_contacts_from(&client, "t.com", "s.com").expect_err("gated");
+    assert_eq!(err.exit_code(), 3);
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+fn transfer_pricing() -> String {
+    envelope(
+        "users.getPricing",
+        r#"<UserGetPricingResult>
+  <ProductType Name="domains">
+    <ProductCategory Name="transfer">
+      <Product Name="com">
+        <Price Duration="1" DurationType="YEAR" Price="9.58" RegularPrice="9.58" YourPrice="9.58" CouponPrice="" Currency="USD" />
+      </Product>
+    </ProductCategory>
+  </ProductType>
+</UserGetPricingResult>"#,
+    )
+}
+
+#[test]
+fn transfer_create_guards_price_then_mutates() {
+    let create_inner = r#"<DomainTransferCreateResult Domainname="inbound.com" Transfer="true" TransferID="15" StatusID="-1" OrderID="575" TransactionID="759" ChargedAmount="9.76" StatusCode="2"/>"#;
+    let transport = FakeTransport::new(vec![
+        transfer_pricing(),
+        envelope("domains.transfer.create", create_inner),
+    ]);
+    let client = test_client(transport);
+
+    let result = transfer::create(&client, "inbound.com", "base64:abc123", 12.0).expect("transfer");
+
+    assert!(result.accepted);
+    assert_eq!(result.transfer_id, "15");
+    assert_eq!(result.listed_price, "9.58");
+    assert!(!result.charged_exceeded_max_price);
+    let requests = client.transport().requests.borrow();
+    let create = &requests[1];
+    assert_eq!(
+        param(create, "Command"),
+        Some("namecheap.domains.transfer.create")
+    );
+    assert_eq!(param(create, "Years"), Some("1"), "API mandates 1 year");
+    assert_eq!(param(create, "EPPCode"), Some("base64:abc123"));
+
+    // refusal over cap: no mutation
+    let transport = FakeTransport::new(vec![transfer_pricing()]);
+    let client = test_client(transport);
+    let err = transfer::create(&client, "inbound.com", "x", 5.0).expect_err("guard");
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(client.transport().requests.borrow().len(), 1);
+
+    // empty EPP code: refused before any call
+    let client = test_client(FakeTransport::new(vec![]));
+    let err = transfer::create(&client, "inbound.com", "  ", 12.0).expect_err("epp");
+    assert!(err.to_string().contains("EPP"));
+    assert_eq!(client.transport().requests.borrow().len(), 0);
+}
+
+#[test]
+fn transfer_status_is_a_plain_read() {
+    let inner = r#"<DomainTransferGetStatusResult TransferID="15" Status="Queued for submission" StatusID="-1" />"#;
+    let transport = FakeTransport::new(vec![envelope("domains.transfer.getStatus", inner)]);
+    let client = test_client(transport);
+
+    let result = transfer::status(&client, "15").expect("status");
+
+    assert_eq!(result.status, "Queued for submission");
+    assert_eq!(
+        param(&client.transport().requests.borrow()[0], "Command"),
+        Some("namecheap.domains.transfer.getstatus")
+    );
 }

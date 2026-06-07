@@ -68,12 +68,16 @@ ncheap dns get example.com             # nameserver mode + host records
 ncheap dns add example.com --type A --name www --address 192.0.2.1   # mutating
 ncheap dns remove example.com --type A --name www    # mutating
 ncheap dns set example.com ns1.host ns2.host   # mutating; see safety model
+ncheap dns set-default example.com     # revert to Namecheap DNS (mutating)
 ncheap privacy list                    # domain privacy subscriptions
 ncheap privacy enable example.com --forward-to you@example.org   # mutating
 ncheap privacy disable example.com     # mutating
 ncheap account balances                # amounts redacted unless --full
 ncheap domains register new.com --max-price 15 --contacts-from owned.com
 ncheap domains renew owned.com --max-price 20   # both mutating, price-guarded
+ncheap domains contacts target.com --set-from owned.com   # mutating
+ncheap transfer create inbound.com --epp-code CODE --max-price 12   # mutating
+ncheap transfer status 12345           # poll an inbound transfer
 ncheap account pricing --action REGISTER --product com   # cached 24h
 ncheap raw domains.getTldList          # direct API call, raw XML out
 ncheap raw domains.getInfo --param DomainName=example.com
@@ -87,6 +91,9 @@ Any command takes `--json` for the machine-readable envelope. Domains for
 `dns` commands may be IDN (normalized to punycode) and are split SLD/TLD via
 the Public Suffix List, so `example.co.uk` works; subdomains are rejected
 with a suggestion rather than silently trimmed.
+
+DNSSEC / DS-record management is **not possible via this tool**: the
+Namecheap API does not expose it; use the dashboard.
 
 List commands auto-paginate: accounts with more than 20 domains are fetched
 completely, not truncated at the API's default page size.
@@ -183,7 +190,14 @@ sustained agentic operation is at the account owner's risk.
   pre-image. Concurrent edits to one zone are last-writer-wins — do not
   run parallel editors against the same domain. Removals that would
   empty the zone are refused.
+- Inbound transfers (`transfer create`) carry the same price and spend
+  guards as purchases. The create path cannot be exercised against the
+  sandbox (it needs a real domain at another registrar), so its live
+  behavior is fixture-verified only; `transfer status` is a plain read.
 - Every mutation is journaled to an append-only, 0600 JSONL file
+  (note: for contact mutations, the journaled request parameters and
+  pre-image include the contact data itself — the journal lives in the
+  same local trust domain as the 0600 config)
   (`~/.local/state/ncheap/mutations.jsonl`): an fsync'd intent record
   before the request, an outcome record after, and pre-images (previous
   nameservers / lock state) where the API offers no undo. If the intent

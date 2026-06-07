@@ -922,3 +922,85 @@ pub fn render_renew(r: &RenewResult) {
         r.transaction_id,
     );
 }
+
+#[derive(Debug, Deserialize)]
+pub struct SetContactsResponse {
+    #[serde(rename = "DomainSetContactResult")]
+    result: SetContactsXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetContactsXml {
+    #[serde(rename = "@Domain", default)]
+    domain: String,
+    // No default — drift fails as parse, like every mutation outcome.
+    #[serde(rename = "@IsSuccess", deserialize_with = "de_bool")]
+    is_success: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetContactsResult {
+    pub domain: String,
+    pub is_success: bool,
+    pub copied_from: String,
+}
+
+/// Replace all four contact sets with those of another owned domain
+/// (mutating). The same zero-stored-PII pattern as register's
+/// --contacts-from; the target's prior contacts are journaled as the
+/// pre-image (the journal is local, 0600).
+pub fn set_contacts_from<T: Transport>(
+    client: &Client<T>,
+    domain: &str,
+    source: &str,
+) -> Result<SetContactsResult, Error> {
+    client.require_mutations_permitted()?;
+    let domain = crate::domain::normalize(domain)?;
+    let before = contacts(client, &domain)?;
+    client.journal_note(
+        "domains.contacts.set",
+        serde_json::json!({
+            "domain": domain,
+            "copied_from": source,
+            "previous_contacts": serde_json::to_value(&before).unwrap_or_default(),
+        }),
+    );
+    let new = contacts(client, source)?;
+    let mut params: Vec<(String, String)> = vec![("DomainName".into(), domain.clone())];
+    for (role, contact) in [
+        ("Registrant", &new.registrant),
+        ("Tech", &new.tech),
+        ("Admin", &new.admin),
+        ("AuxBilling", &new.aux_billing),
+    ] {
+        contact_params(role, contact, &mut params);
+    }
+    let param_refs: Vec<(&str, &str)> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let body = client.call_mut("domains.setContacts", &param_refs)?;
+    let resp: SetContactsResponse = xml::parse(&body)?;
+    Ok(SetContactsResult {
+        domain: if resp.result.domain.is_empty() {
+            domain
+        } else {
+            resp.result.domain
+        },
+        is_success: resp.result.is_success,
+        copied_from: source.to_owned(),
+    })
+}
+
+pub fn render_set_contacts(result: &SetContactsResult) {
+    crate::safe_println!(
+        "{}: contacts replaced from {} ({})",
+        result.domain,
+        result.copied_from,
+        if result.is_success {
+            "success"
+        } else {
+            "NOT successful"
+        },
+    );
+}

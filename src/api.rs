@@ -29,6 +29,7 @@ pub const READ_ONLY_COMMANDS: &[&str] = &[
     "domains.gettldlist",
     "domains.dns.getlist",
     "domains.dns.gethosts",
+    "domains.transfer.getstatus",
     "whoisguard.getlist",
     "users.getbalances",
     "users.getpricing",

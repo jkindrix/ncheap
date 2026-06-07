@@ -44,6 +44,11 @@ pub enum Command {
         #[command(subcommand)]
         command: PrivacyCommand,
     },
+    /// Domain transfer operations
+    Transfer {
+        #[command(subcommand)]
+        command: TransferCommand,
+    },
     /// Call an allowlisted read-only API method directly, emitting raw XML
     Raw {
         /// API command, e.g. domains.getTldList ("namecheap." prefix optional)
@@ -71,7 +76,13 @@ impl Command {
                     }
                 }
                 DomainsCommand::Info { .. } => "domains.info",
-                DomainsCommand::Contacts { .. } => "domains.contacts",
+                DomainsCommand::Contacts { set_from, .. } => {
+                    if set_from.is_some() {
+                        "domains.contacts.set"
+                    } else {
+                        "domains.contacts"
+                    }
+                }
                 DomainsCommand::Register { .. } => "domains.register",
                 DomainsCommand::Renew { .. } => "domains.renew",
             },
@@ -84,15 +95,40 @@ impl Command {
                 DnsCommand::Add { .. } => "dns.add",
                 DnsCommand::Remove { .. } => "dns.remove",
                 DnsCommand::Set { .. } => "dns.set",
+                DnsCommand::SetDefault { .. } => "dns.set_default",
             },
             Command::Privacy { command } => match command {
                 PrivacyCommand::List => "privacy.list",
                 PrivacyCommand::Enable { .. } => "privacy.enable",
                 PrivacyCommand::Disable { .. } => "privacy.disable",
             },
+            Command::Transfer { command } => match command {
+                TransferCommand::Create { .. } => "transfer.create",
+                TransferCommand::Status { .. } => "transfer.status",
+            },
             Command::Raw { .. } => "raw",
         }
     }
+}
+
+#[derive(Subcommand)]
+pub enum TransferCommand {
+    /// Start an inbound transfer (mutating, charges money; price-guarded)
+    Create {
+        domain: String,
+        /// EPP/auth code from the current registrar (note: visible in
+        /// process listings and shell history)
+        #[arg(long)]
+        epp_code: String,
+        /// Ceiling on the live LISTED transfer price
+        #[arg(long)]
+        max_price: f64,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Check the status of a transfer by its TransferID
+    Status { transfer_id: String },
 }
 
 #[derive(Subcommand)]
@@ -170,6 +206,13 @@ pub enum DnsCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Revert a domain to Namecheap default DNS (mutating)
+    SetDefault {
+        domain: String,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -197,12 +240,19 @@ pub enum DomainsCommand {
     },
     /// Show registration, privacy, and DNS details for a domain
     Info { domain: String },
-    /// Show domain contacts (PII redacted unless --full)
+    /// Show domain contacts (PII redacted unless --full), or replace them
+    /// with another owned domain's via --set-from (mutating)
     Contacts {
         domain: String,
         /// Show the actual contact fields
         #[arg(long)]
         full: bool,
+        /// Replace all four contact sets with this owned domain's (mutating)
+        #[arg(long, value_name = "DOMAIN", conflicts_with = "full")]
+        set_from: Option<String>,
+        /// Confirm the mutation (required for non-interactive use)
+        #[arg(long)]
+        yes: bool,
     },
     /// Register a domain (mutating, charges money; live price guard)
     Register {

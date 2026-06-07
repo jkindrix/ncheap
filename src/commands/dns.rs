@@ -443,3 +443,44 @@ pub fn render_edit(result: &EditResult) {
         result.records_after,
     );
 }
+
+#[derive(Debug, Deserialize)]
+pub struct SetDefaultResponse {
+    #[serde(rename = "DomainDNSSetDefaultResult")]
+    result: SetDefaultXml,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetDefaultXml {
+    #[serde(rename = "@Domain", default)]
+    domain: String,
+    #[serde(rename = "@Updated", deserialize_with = "de_bool")]
+    updated: bool,
+}
+
+/// Revert a domain to Namecheap default DNS (mutating) — the inverse of
+/// `dns set`. Pre-image (the custom nameservers being left) journaled.
+pub fn set_default<T: Transport>(client: &Client<T>, domain: &str) -> Result<SetResult, Error> {
+    client.require_mutations_permitted()?;
+    let (sld, tld) = split_sld_tld(domain)?;
+    let pre_params = [("SLD", sld.as_str()), ("TLD", tld.as_str())];
+    let pre_body = client.call("domains.dns.getList", &pre_params)?;
+    let pre: GetListResponse = xml::parse(&pre_body)?;
+    let previous_nameservers = pre.result.nameservers;
+    client.journal_note(
+        "dns.set_default",
+        serde_json::json!({
+            "domain": domain,
+            "previous_nameservers": previous_nameservers,
+            "is_using_our_dns": pre.result.is_using_our_dns,
+        }),
+    );
+    let body = client.call_mut("domains.dns.setDefault", &pre_params)?;
+    let resp: SetDefaultResponse = xml::parse(&body)?;
+    Ok(SetResult {
+        domain: resp.result.domain,
+        updated: resp.result.updated,
+        nameservers: vec![],
+        previous_nameservers,
+    })
+}

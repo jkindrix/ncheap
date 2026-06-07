@@ -3,7 +3,9 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use ncheap::api::{Client, HttpTransport};
-use ncheap::cli::{AccountCommand, Cli, Command, DnsCommand, DomainsCommand, PrivacyCommand};
+use ncheap::cli::{
+    AccountCommand, Cli, Command, DnsCommand, DomainsCommand, PrivacyCommand, TransferCommand,
+};
 use ncheap::commands::account::PricingQuery;
 use ncheap::{commands, config, output};
 
@@ -188,7 +190,28 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
                 );
                 Ok(())
             }
-            DomainsCommand::Contacts { domain, full } => {
+            DomainsCommand::Contacts {
+                domain,
+                full,
+                set_from,
+                yes,
+            } => {
+                if let Some(source) = set_from {
+                    confirm_mutation(
+                        &format!("replace ALL contacts of {domain} with those of {source}"),
+                        *yes,
+                    )?;
+                    let result = commands::domains::set_contacts_from(client, domain, source)?;
+                    output::success(
+                        cli.json,
+                        name,
+                        &result,
+                        client.profile(),
+                        client.calls(),
+                        || commands::domains::render_set_contacts(&result),
+                    );
+                    return Ok(());
+                }
                 let contacts = commands::domains::contacts(client, domain)?;
                 let human = || commands::domains::render_contacts(&contacts, *full);
                 if *full {
@@ -392,6 +415,19 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
                 );
                 Ok(())
             }
+            DnsCommand::SetDefault { domain, yes } => {
+                confirm_mutation(&format!("revert {domain} to Namecheap default DNS"), *yes)?;
+                let result = commands::dns::set_default(client, domain)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::dns::render_set(&result),
+                );
+                Ok(())
+            }
             DnsCommand::Set {
                 domain,
                 nameservers,
@@ -456,6 +492,41 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
                     client.profile(),
                     client.calls(),
                     || commands::privacy::render_toggle(&result),
+                );
+                Ok(())
+            }
+        },
+        Command::Transfer { command } => match command {
+            TransferCommand::Create {
+                domain,
+                epp_code,
+                max_price,
+                yes,
+            } => {
+                confirm_mutation(
+                    &format!("start inbound transfer of {domain} at up to {max_price:.2}"),
+                    *yes,
+                )?;
+                let result = commands::transfer::create(client, domain, epp_code, *max_price)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::transfer::render_create(&result),
+                );
+                Ok(())
+            }
+            TransferCommand::Status { transfer_id } => {
+                let result = commands::transfer::status(client, transfer_id)?;
+                output::success(
+                    cli.json,
+                    name,
+                    &result,
+                    client.profile(),
+                    client.calls(),
+                    || commands::transfer::render_status(&result),
                 );
                 Ok(())
             }

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-06-07
+
+Cross-process coordination and operator-safety polish.
+
+### Added
+
+- Concurrent ncheap processes on one machine now serialize API calls
+  through a state-directory lock file (fail-open)
+- `--expect-profile NAME`: refuse before any API call when the resolved
+  profile differs — guards against a leaked `NCHEAP_PROFILE`
+- Human-mode output strips C0/C1 control characters from
+  server-controlled strings (`raw` remains verbatim)
+- SECURITY.md and GitHub private vulnerability reporting
+
+### Changed (breaking for builders only)
+
+- MSRV 1.88 -> 1.89 (`std::fs::File::lock`; removes the need for any
+  file-locking dependency)
+- The spend-cap check holds an exclusive lock across check-and-reserve:
+  concurrent purchases cannot both pass the cap
+- Privacy ID resolution stops paging once the domain is found
+
 ## [0.5.0] - 2026-06-07
 
 Spend caps and live verification of the failure modes. With this release
@@ -150,6 +172,7 @@ Initial release: the complete read-only command surface.
 - IDN (punycode) normalization and Public Suffix List-aware domain
   validation on all domain arguments
 
+[0.6.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jkindrix/ncheap/releases/tag/v0.3.0

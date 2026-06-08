@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-08
+
+### Added
+
+- `doctor` — a read-only environment preflight: active profile, the
+  production-mutation gate and spend-cap state, state-directory
+  writability, and one live `users.getBalances` to confirm the key is
+  valid and the calling IP is whitelisted. Findings are data (exit 0);
+  gate scripts on the `ready` field.
+
+### Fixed
+
+- Date normalization no longer "normalizes" impossible calendar dates
+  (e.g. `02/30`); they pass through verbatim like any other unrecognized
+  value, matching the documented contract.
+
 ## [0.7.0] - 2026-06-07
 
 The two largest user-facing features since 0.2.0.

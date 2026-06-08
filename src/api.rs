@@ -262,6 +262,12 @@ impl<T: Transport> Client<T> {
         self.journal_dir = dir;
     }
 
+    /// The mutation-journal / state directory, if configured. None in
+    /// library/test use; the binary always sets it.
+    pub fn journal_dir(&self) -> Option<&std::path::Path> {
+        self.journal_dir.as_deref()
+    }
+
     /// Override throttle spacing and retry backoff (tests use zero so the
     /// retry and pagination paths run without real sleeps).
     pub fn set_timing(&mut self, spacing: Duration, retry_backoff: Duration) {

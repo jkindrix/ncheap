@@ -116,6 +116,20 @@ fn run(cli: &Cli, client: &Client<HttpTransport>) -> Result<(), ncheap::api::Err
             );
             Ok(())
         }
+        Command::Doctor => {
+            // Check results are data: doctor reports them and exits 0, like
+            // audit. Callers gate on the `ready` field, not the exit code.
+            let report = commands::doctor::run(client);
+            output::success(
+                cli.json,
+                name,
+                &report,
+                client.profile(),
+                client.calls(),
+                || commands::doctor::render(&report),
+            );
+            Ok(())
+        }
         Command::Domains { command } => match command {
             DomainsCommand::List => {
                 let domains = commands::domains::list(client)?;

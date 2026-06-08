@@ -24,6 +24,8 @@ pub struct Cli {
 pub enum Command {
     /// Run every read-only safety check across the account (3 + 2N API calls)
     Audit,
+    /// Preflight the environment: config, profile, gates, and a live auth check
+    Doctor,
     /// Domain operations
     Domains {
         #[command(subcommand)]
@@ -65,6 +67,7 @@ impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Command::Audit => "audit",
+            Command::Doctor => "doctor",
             Command::Domains { command } => match command {
                 DomainsCommand::List => "domains.list",
                 DomainsCommand::Check { .. } => "domains.check",

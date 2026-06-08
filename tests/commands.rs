@@ -1755,3 +1755,113 @@ fn transfer_status_is_a_plain_read() {
         Some("namecheap.domains.transfer.getstatus")
     );
 }
+
+// --- doctor (preflight) ---
+
+const BALANCES_OK: &str = r#"<UserGetBalancesResult Currency="USD" AvailableBalance="100.00" AccountBalance="100.00" EarnedAmount="0" WithdrawableAmount="0" FundsRequiredForAutoRenew="10.00" />"#;
+
+fn doctor_check<'a>(report: &'a ncheap::commands::doctor::DoctorReport, name: &str) -> &'a str {
+    report
+        .checks
+        .iter()
+        .find(|c| c.check == name)
+        .map(|c| c.status)
+        .unwrap_or_else(|| panic!("no {name} check in report"))
+}
+
+#[test]
+fn doctor_ready_on_sandbox_with_valid_auth() {
+    let transport = FakeTransport::new(vec![envelope("users.getBalances", BALANCES_OK)]);
+    let client = test_client(transport);
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert!(report.ready, "all checks should pass");
+    assert_eq!(doctor_check(&report, "api_auth"), "ok");
+    // A sandbox profile's gate is fine, not a warning.
+    assert_eq!(doctor_check(&report, "production_gate"), "ok");
+}
+
+#[test]
+fn doctor_flags_ip_whitelist_problem() {
+    let err_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ApiResponse xmlns="http://api.namecheap.com/xml.response" Status="ERROR">
+  <Errors><Error Number="1011150">Parameter RequestIP is invalid</Error></Errors>
+  <CommandResponse />
+</ApiResponse>"#;
+    let transport = FakeTransport::new(vec![err_xml.to_string()]);
+    let client = test_client(transport);
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert!(!report.ready, "an IP-whitelist failure blocks readiness");
+    let auth = report
+        .checks
+        .iter()
+        .find(|c| c.check == "api_auth")
+        .unwrap();
+    assert_eq!(auth.status, "fail");
+    assert!(
+        auth.detail.to_lowercase().contains("whitelist"),
+        "detail should name the whitelist: {}",
+        auth.detail
+    );
+}
+
+#[test]
+fn doctor_flags_transport_failure() {
+    use ncheap::api::TransportFailure;
+    let transport = FakeTransport::with_results(vec![Err(TransportFailure::Other(
+        "connection refused".into(),
+    ))]);
+    let client = test_client(transport);
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert!(!report.ready);
+    assert_eq!(doctor_check(&report, "api_auth"), "fail");
+}
+
+#[test]
+fn doctor_rate_limit_is_warn_not_fail() {
+    use ncheap::api::TransportFailure;
+    let transport = FakeTransport::with_results(vec![Err(TransportFailure::Status(405))]);
+    let client = test_client(transport);
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert_eq!(doctor_check(&report, "api_auth"), "warn");
+    assert!(
+        report.ready,
+        "a transient rate limit must not block readiness"
+    );
+}
+
+#[test]
+fn doctor_warns_on_armed_production_without_cap() {
+    let transport = FakeTransport::new(vec![envelope("users.getBalances", BALANCES_OK)]);
+    // production, mutations armed, no max_daily_spend (test_profile default).
+    let client = gate_client(transport, false, true);
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert_eq!(doctor_check(&report, "production_gate"), "warn");
+    assert_eq!(doctor_check(&report, "spend_cap"), "warn");
+    // Warnings alone do not unset readiness — only failing checks do.
+    assert!(report.ready);
+}
+
+#[test]
+fn doctor_state_dir_writable_when_configured() {
+    let dir = journal_dir("doctor");
+    let transport = FakeTransport::new(vec![envelope("users.getBalances", BALANCES_OK)]);
+    let mut client = Client::new(transport, test_profile());
+    client.set_timing(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    client.set_journal_dir(Some(dir.clone()));
+
+    let report = ncheap::commands::doctor::run(&client);
+
+    assert_eq!(doctor_check(&report, "state_dir"), "ok");
+    assert!(dir.exists(), "probe creates the state dir");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -58,6 +58,7 @@ match production.
 
 ```
 ncheap audit                           # every safety check, one report (minutes on large accounts)
+ncheap doctor                          # preflight: config, profile, gates, live auth check
 ncheap domains list                    # all domains, auto-paginated
 ncheap domains check example.com ...   # availability (up to 50 per call)
 ncheap domains info example.com        # registration, privacy, DNS details
@@ -98,6 +99,12 @@ Namecheap API does not expose it; use the dashboard.
 List commands auto-paginate: accounts with more than 20 domains are fetched
 completely, not truncated at the API's default page size.
 
+`doctor` is a read-only preflight: it reports the active profile, the
+production-mutation gate and spend-cap state, state-directory writability,
+and runs one live `users.getBalances` to confirm the key is valid and the
+calling IP is whitelisted. Findings are data — it always exits 0; gate
+scripts on the `ready` field (`ncheap doctor --json | jq -e .data.ready`).
+
 ### JSON envelope
 
 Every command with `--json` emits one envelope on stdout:
@@ -109,13 +116,13 @@ Every command with `--json` emits one envelope on stdout:
   "command": "domains.list",
   "data": [ ... ],
   "error": null,
-  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.7.0" }
+  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.8.0" }
 }
 ```
 
 `schema` identifies the envelope revision and `meta.version` the producing
 binary. `command` is the dotted command name — one per subcommand: `audit`,
-`domains.list`, `domains.check`, `domains.lock`, `domains.lock.set`,
+`doctor`, `domains.list`, `domains.check`, `domains.lock`, `domains.lock.set`,
 `domains.info`, `domains.contacts`, `domains.contacts.set`,
 `domains.register`, `domains.renew`, `dns.get`, `dns.add`, `dns.remove`,
 `dns.set`, `dns.set_default`, `privacy.list`, `privacy.enable`,

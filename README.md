@@ -57,7 +57,7 @@ match production.
 ## Usage
 
 ```
-ncheap audit                           # every safety check, one report
+ncheap audit                           # every safety check, one report (minutes on large accounts)
 ncheap domains list                    # all domains, auto-paginated
 ncheap domains check example.com ...   # availability (up to 50 per call)
 ncheap domains info example.com        # registration, privacy, DNS details
@@ -109,16 +109,19 @@ Every command with `--json` emits one envelope on stdout:
   "command": "domains.list",
   "data": [ ... ],
   "error": null,
-  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.3.0" }
+  "meta": { "profile": "production", "sandbox": false, "api_calls": 1, "version": "0.7.0" }
 }
 ```
 
 `schema` identifies the envelope revision and `meta.version` the producing
-binary. `command` is the dotted command name (`domains.list`,
-`domains.check`, `domains.lock`, `domains.info`, `domains.contacts`,
-`domains.register`, `domains.renew`, `dns.get`, `dns.set`, `privacy.list`,
-`privacy.enable`, `privacy.disable`, `account.balances`, `account.pricing`,
-`raw`) — or the sentinel `cli` when argument parsing itself failed. All dates in envelope data are ISO-8601 (`YYYY-MM-DD`) — the API's
+binary. `command` is the dotted command name — one per subcommand: `audit`,
+`domains.list`, `domains.check`, `domains.lock`, `domains.lock.set`,
+`domains.info`, `domains.contacts`, `domains.contacts.set`,
+`domains.register`, `domains.renew`, `dns.get`, `dns.add`, `dns.remove`,
+`dns.set`, `dns.set_default`, `privacy.list`, `privacy.enable`,
+`privacy.disable`, `account.balances`, `account.pricing`, `transfer.create`,
+`transfer.status`, `raw` — or the sentinel `cli` when argument parsing
+itself failed. All dates in envelope data are ISO-8601 (`YYYY-MM-DD`) — the API's
 native `MM/DD/YYYY` strings sort wrong lexically; `raw` output remains a
 verbatim passthrough. The `registry_hold` field (formerly `is_locked`)
 reports the API's `IsLocked` — a registry/dispute hold, **not** the
@@ -211,7 +214,9 @@ sustained agentic operation is at the account owner's risk.
   require `--max-price` and refuse pre-flight if the **live** listed price
   exceeds it — the pricing cache is never consulted for purchase decisions.
   Registration contacts are copied from an owned domain (`--contacts-from`);
-  ncheap stores no contact data. Premium domains are refused. The actual
+  ncheap stores no contact data. Registration attaches Namecheap's free
+  Whoisguard subscription but leaves it **disabled** — turn it on with
+  `privacy enable`. Premium domains are refused. The actual
   charge can exceed the listed price slightly (ICANN fees); both figures
   are reported, and `charged_exceeded_max_price` is set when the charge
   came in above the cap. Early Access Phase (EAP) domains are refused like

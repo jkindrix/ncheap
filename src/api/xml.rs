@@ -88,12 +88,27 @@ pub fn to_iso_date(s: &str) -> String {
             parts[2].parse::<u32>(),
         )
         && (1..=12).contains(&m)
-        && (1..=31).contains(&d)
         && y >= 1000
+        && (1..=days_in_month(y, m)).contains(&d)
     {
         return format!("{y:04}-{m:02}-{d:02}");
     }
     s.to_owned()
+}
+
+/// Days in a Gregorian month, so an impossible day (02/30) passes through
+/// verbatim like any other unrecognized value rather than being "normalized"
+/// into a fictitious ISO date. `month` is range-checked by the caller.
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400) => {
+            29
+        }
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Namecheap booleans arrive as text and are not consistently cased across
@@ -122,8 +137,18 @@ mod tests {
 
     #[test]
     fn unrecognized_dates_pass_through_verbatim() {
-        for odd in ["", "2026-08-20", "13/40/2026", "soon", "1/2"] {
+        for odd in [
+            "",
+            "2026-08-20",
+            "13/40/2026",
+            "soon",
+            "1/2",
+            "02/30/2026",
+            "02/29/2025",
+        ] {
             assert_eq!(to_iso_date(odd), odd, "must not mangle {odd:?}");
         }
+        // A real leap day still normalizes.
+        assert_eq!(to_iso_date("02/29/2024"), "2024-02-29");
     }
 }
